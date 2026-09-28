@@ -4,7 +4,7 @@
 //!
 //! [`crate::backend::gc`] soft-deletes a task (`deleted` flag) and then removes all its outgoing
 //! edges. For this to be correct all 'incoming edges' must be gone.  However GC is a highly
-//! concurrent process and an AggregationUpdateQueue may 'suspend' while GC is running.  To assist
+//! concurrent process. The snapshot waits for graph updates to finish before running GC. To assist
 //! with GC aggregation updates need to be defensive about running on deleted tasks and also assist
 //! GC by telling the context whenever an aggregation update queue operation may make a task
 //! collectible (via [`ExecuteContext::note_maybe_collectible`] on `1->0` transitions), and also
@@ -16,13 +16,12 @@ use std::{
     hash::Hash,
     mem::take,
     num::NonZeroU32,
-    ops::{ControlFlow, Deref},
+    ops::ControlFlow,
     thread::yield_now,
     time::{Duration, Instant},
 };
 
 use anyhow::Result;
-use bincode::{Decode, Encode};
 use indexmap::map::Entry;
 use ringmap::RingSet;
 use rustc_hash::{FxBuildHasher, FxHashMap};
@@ -199,11 +198,9 @@ impl ComputeDirtyAndCleanUpdateResult {
     }
 }
 
-#[derive(Encode, Decode, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct InnerOfUppersHasNewFollowersJob {
-    #[bincode(with = "turbo_bincode::smallvec")]
     pub upper_ids: TaskIdVec,
-    #[bincode(with = "turbo_bincode::smallvec")]
     pub new_follower_ids: TaskIdVec,
 }
 
@@ -213,11 +210,9 @@ impl From<InnerOfUppersHasNewFollowersJob> for AggregationUpdateJob {
     }
 }
 
-#[derive(Encode, Decode, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct InnerOfUppersLostFollowersJob {
-    #[bincode(with = "turbo_bincode::smallvec")]
     pub upper_ids: TaskIdVec,
-    #[bincode(with = "turbo_bincode::smallvec")]
     pub lost_follower_ids: TaskIdVec,
 }
 
@@ -227,7 +222,7 @@ impl From<InnerOfUppersLostFollowersJob> for AggregationUpdateJob {
     }
 }
 
-#[derive(Encode, Decode, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct AggregatedDataUpdateJob {
     pub upper_ids: TaskIdVec,
     pub update: AggregatedDataUpdate,
@@ -240,7 +235,7 @@ impl From<AggregatedDataUpdateJob> for AggregationUpdateJob {
 }
 
 /// A job in the job queue for updating something in the aggregated graph.
-#[derive(Encode, Decode, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub enum AggregationUpdateJob {
     /// Update the aggregation number of a task. This might result in balancing needed to update
     /// "upper" and "follower" edges.
@@ -248,11 +243,6 @@ pub enum AggregationUpdateJob {
         task_id: TaskId,
         base_aggregation_number: u32,
         distance: Option<NonZeroU32>,
-    },
-    /// Notifies an upper task that one of its inner tasks has a new follower.
-    InnerOfUpperHasNewFollower {
-        upper_id: TaskId,
-        new_follower_id: TaskId,
     },
     /// Notifies multiple upper tasks that one of its inner tasks has a new follower.
     InnerOfUppersHasNewFollower {
@@ -299,12 +289,7 @@ pub enum AggregationUpdateJob {
     /// Adjust the persistent `parent_count` of each task in `task_ids` by `delta`
     AdjustParentCount { task_ids: TaskIdVec, delta: i32 },
     /// Adjust the session-only `transient_ref_count` of each task in `task_ids` by `delta`
-    AdjustTransientRefCount {
-        #[bincode(skip, default = "unreachable_decode")]
-        task_ids: TaskIdVec,
-        #[bincode(skip, default = "unreachable_decode")]
-        delta: i32,
-    },
+    AdjustTransientRefCount { task_ids: TaskIdVec, delta: i32 },
     /// Notifies an upper task about changed data from an inner task.
     AggregatedDataUpdate(Box<AggregatedDataUpdateJob>),
     /// Mark these tasks dirty because they have a dependency on a task being deleted by GC.
@@ -320,37 +305,19 @@ pub enum AggregationUpdateJob {
     },
     /// Increases the active counter of the task
     IncreaseActiveCount {
-        // TODO: bgw: Add a way to skip the entire enum variant in bincode (generating an error
-        // upon attempted serialization) similar to #[serde(skip)] on variants
-        #[bincode(skip, default = "unreachable_decode")]
         task: TaskId,
         release_construction_ref: bool,
     },
     /// Increases the active counters of the tasks
-    IncreaseActiveCounts {
-        #[bincode(skip, default = "unreachable_decode")]
-        task_ids: TaskIdVec,
-    },
+    IncreaseActiveCounts { task_ids: TaskIdVec },
     /// Decreases the active counter of the task
-    DecreaseActiveCount {
-        #[bincode(skip, default = "unreachable_decode")]
-        task: TaskId,
-    },
+    DecreaseActiveCount { task: TaskId },
     /// Decreases the active counters of the tasks
-    DecreaseActiveCounts {
-        #[bincode(skip, default = "unreachable_decode")]
-        task_ids: TaskIdVec,
-    },
+    DecreaseActiveCounts { task_ids: TaskIdVec },
     /// Balances the edges of the graph. This checks if the graph invariant is still met for this
     /// edge and coverts a upper edge to a follower edge or vice versa. Balancing might triggers
     /// more changes to the structure.
     BalanceEdge { upper_id: TaskId, task_id: TaskId },
-    /// Does nothing. This is used to filter out transient jobs during serialization.
-    Noop,
-}
-
-fn unreachable_decode<T>() -> T {
-    unreachable!("AggregatedDataUpdateJob variant should not have been encoded, cannot decode")
 }
 
 impl AggregationUpdateJob {
@@ -373,34 +340,12 @@ impl AggregationUpdateJob {
     }
 }
 
-#[derive(Default, Encode, Decode, Clone, Copy, Debug)]
-#[bincode(decode_bounds = "T: Default", borrow_decode_bounds = "T: Default")]
-pub struct SessionDependent<T> {
-    #[bincode(skip)]
-    pub value: T,
-}
-
-impl<T> SessionDependent<T> {
-    pub fn new(value: T) -> Self {
-        Self { value }
-    }
-}
-
-impl<T> Deref for SessionDependent<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.value
-    }
-}
-
 /// Aggregated data update.
-#[derive(Default, Encode, Decode, Clone, Debug)]
+#[derive(Default, Clone, Debug)]
 pub struct AggregatedDataUpdate {
     /// One of the inner tasks has changed its dirty state or aggregated dirty state.
     /// (task id, dirty update, current session clean update)
-    // TODO Serialize the current session clean update as 0
-    dirty_container_update: Option<(TaskId, i32, SessionDependent<i32>)>,
+    dirty_container_update: Option<(TaskId, i32, i32)>,
     /// One of the inner tasks has changed its collectibles count or aggregated collectibles count.
     collectibles_update: Vec<(CollectibleRef, i32)>,
 }
@@ -460,7 +405,7 @@ impl AggregatedDataUpdate {
         } = &mut self;
         if let Some((_, value, current_session_clean_update)) = dirty_container_update.as_mut() {
             *value = -*value;
-            current_session_clean_update.value = -current_session_clean_update.value;
+            *current_session_clean_update = -*current_session_clean_update;
         }
         for (_, value) in collectibles_update.iter_mut() {
             *value = -*value;
@@ -496,7 +441,7 @@ impl AggregatedDataUpdate {
             if should_track_activeness {
                 // When a dirty container count is increased and the task is considered as active
                 // we need to schedule the dirty tasks in the new dirty container
-                let current_session_update = count - *current_session_clean_update;
+                let current_session_update = count - current_session_clean_update;
                 if current_session_update > 0 && task.has_activeness() {
                     queue.push_find_and_schedule_dirty(dirty_container_id)
                 }
@@ -525,15 +470,14 @@ impl AggregatedDataUpdate {
             // Update AggregatedSessionDependentCleanContainer
             let old_single_container_current_session_clean_count;
             let new_single_container_current_session_clean_count;
-            if *current_session_clean_update != 0 {
+            if current_session_clean_update != 0 {
                 new_single_container_current_session_clean_count = task
                     .update_and_get_aggregated_current_session_clean_containers(
                         dirty_container_id,
-                        *current_session_clean_update,
+                        current_session_clean_update,
                     );
                 old_single_container_current_session_clean_count =
-                    new_single_container_current_session_clean_count
-                        - *current_session_clean_update;
+                    new_single_container_current_session_clean_count - current_session_clean_update;
             } else {
                 new_single_container_current_session_clean_count = task
                     .get_aggregated_current_session_clean_containers(&dirty_container_id)
@@ -611,7 +555,7 @@ impl AggregatedDataUpdate {
                     result = aggregated_update;
 
                     if let Some((_, count, current_session_clean)) = result.dirty_container_update
-                        && count - *current_session_clean < 0
+                        && count - current_session_clean < 0
                     {
                         // When the current task is no longer dirty, we need to fire the
                         // aggregate root events and do some cleanup
@@ -686,11 +630,7 @@ impl AggregatedDataUpdate {
         count: i32,
         current_session_clean_update: i32,
     ) -> Self {
-        self.dirty_container_update = Some((
-            task_id,
-            count,
-            SessionDependent::new(current_session_clean_update),
-        ));
+        self.dirty_container_update = Some((task_id, count, current_session_clean_update));
         self
     }
 
@@ -702,21 +642,19 @@ impl AggregatedDataUpdate {
 }
 
 /// An aggregation number update job that is enqueued.
-#[derive(Encode, Decode, Clone)]
+#[derive(Clone)]
 struct AggregationNumberUpdate {
     base_aggregation_number: u32,
     distance: Option<NonZeroU32>,
     #[cfg(feature = "trace_aggregation_update_queue")]
-    #[bincode(skip)]
     span: Option<Span>,
 }
 
 /// An aggregated data update job that is enqueued. See `AggregatedDataUpdate`.
-#[derive(Encode, Decode, Clone)]
+#[derive(Clone)]
 struct AggregationUpdateJobItem {
     job: AggregationUpdateJob,
     #[cfg(feature = "trace_aggregation_update_queue")]
-    #[bincode(skip)]
     span: Option<Span>,
 }
 
@@ -745,12 +683,11 @@ struct AggregationUpdateJobGuard {
 }
 
 /// A balancing job that is enqueued. See `balance_edge`.
-#[derive(Encode, Decode, Clone)]
+#[derive(Clone)]
 struct BalanceJob {
     upper_id: TaskId,
     task_id: TaskId,
     #[cfg(feature = "trace_aggregation_update_queue")]
-    #[bincode(skip)]
     span: Option<Span>,
 }
 
@@ -781,7 +718,7 @@ impl PartialEq for BalanceJob {
 impl Eq for BalanceJob {}
 
 /// An optimization job that is enqueued. See `optimize_task`.
-#[derive(Encode, Decode, Clone)]
+#[derive(Clone)]
 struct OptimizeJob {
     task_id: TaskId,
     /// Whether the `optimization_pending` flag was known to already be set on the task at
@@ -805,7 +742,6 @@ struct OptimizeJob {
     ///   performed. Skipping the flag set is exactly what we want.
     optimization_pending_flag_already_set: bool,
     #[cfg(feature = "trace_aggregation_update_queue")]
-    #[bincode(skip)]
     span: Option<Span>,
 }
 
@@ -835,11 +771,10 @@ impl PartialEq for OptimizeJob {
 impl Eq for OptimizeJob {}
 
 /// A job to find and schedule dirty tasks that is enqueued. See `find_and_schedule_dirty`.
-#[derive(Encode, Decode, Clone)]
+#[derive(Clone)]
 struct FindAndScheduleJob {
     task_id: TaskId,
     #[cfg(feature = "trace_find_and_schedule")]
-    #[bincode(skip)]
     span: Option<Span>,
 }
 
@@ -868,7 +803,7 @@ impl PartialEq for FindAndScheduleJob {
 impl Eq for FindAndScheduleJob {}
 
 #[cfg(feature = "trace_aggregation_update_stats")]
-#[derive(Default, Encode, Decode, Clone, Debug)]
+#[derive(Default, Debug)]
 pub struct AggregationUpdateQueueStats {
     new_followers: usize,
     inner_of_upper_has_new_follower: usize,
@@ -878,8 +813,6 @@ pub struct AggregationUpdateQueueStats {
     inner_of_upper_lost_follower: usize,
     inner_of_upper_lost_followers: usize,
     inner_of_uppers_lost_follower: usize,
-    increase_active_count: usize,
-    decrease_active_count: usize,
     balance_edge: usize,
     balance_edge_batches: usize,
     update_aggregation_number: usize,
@@ -891,82 +824,18 @@ pub struct AggregationUpdateQueueStats {
     schedule_task: usize,
 }
 
-/// Encodes the jobs in the queue. This is used to filter out transient jobs during encoding.
-mod encode_jobs {
-    use bincode::{
-        de::{BorrowDecoder, Decoder},
-        enc::Encoder,
-        error::{DecodeError, EncodeError},
-    };
-
-    use super::*;
-
-    pub fn encode<E: Encoder>(
-        jobs: &VecDeque<AggregationUpdateJobItem>,
-        encoder: &mut E,
-    ) -> Result<(), EncodeError> {
-        usize::encode(&jobs.len(), encoder)?;
-        for job in jobs {
-            match job.job {
-                AggregationUpdateJob::IncreaseActiveCount { .. }
-                | AggregationUpdateJob::IncreaseActiveCounts { .. }
-                | AggregationUpdateJob::DecreaseActiveCount { .. }
-                | AggregationUpdateJob::DecreaseActiveCounts { .. }
-                | AggregationUpdateJob::AdjustTransientRefCount { .. } => {
-                    AggregationUpdateJobItem {
-                        job: AggregationUpdateJob::Noop,
-                        #[cfg(feature = "trace_aggregation_update_queue")]
-                        span: None,
-                    }
-                    .encode(encoder)?;
-                }
-                _ => {
-                    job.encode(encoder)?;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub fn decode<Context, D: Decoder<Context = Context>>(
-        decoder: &mut D,
-    ) -> Result<VecDeque<AggregationUpdateJobItem>, DecodeError> {
-        let len = usize::decode(decoder)?;
-        let mut jobs = VecDeque::with_capacity(len);
-        for _ in 0..len {
-            jobs.push_back(Decode::decode(decoder)?);
-        }
-        Ok(jobs)
-    }
-
-    pub fn borrow_decode<'de, Context, D: BorrowDecoder<'de, Context = Context>>(
-        decoder: &mut D,
-    ) -> Result<VecDeque<AggregationUpdateJobItem>, DecodeError> {
-        decode(decoder)
-    }
-}
-
 /// A queue for aggregation update jobs.
-#[derive(Default, Encode, Decode, Clone)]
+#[derive(Default)]
 pub struct AggregationUpdateQueue {
-    #[bincode(with = "encode_jobs")]
     jobs: VecDeque<AggregationUpdateJobItem>,
-    #[bincode(with = "turbo_bincode::indexmap")]
     aggregation_number_updates: FxIndexMap<TaskId, AggregationNumberUpdate>,
     done_aggregation_number_updates: FxHashMap<TaskId, AggregationNumberUpdate>,
-    #[bincode(with = "turbo_bincode::ringset")]
     find_and_schedule: FxRingSet<FindAndScheduleJob>,
-    #[bincode(with = "turbo_bincode::ringset")]
     balance_queue: FxRingSet<BalanceJob>,
-    #[bincode(with = "turbo_bincode::ringset")]
     optimize_queue: FxRingSet<OptimizeJob>,
     /// Number of optimizations executed by this queue so far. See
-    /// `MAX_OPTIMIZATIONS_PER_QUEUE`. Persisted with the queue so the budget is preserved
-    /// across suspend/resume — otherwise resuming a queue would reset the budget and a long
-    /// operation could perform arbitrarily many optimizations by going through several
-    /// suspend/resume cycles.
+    /// `MAX_OPTIMIZATIONS_PER_QUEUE`.
     optimizations_executed: usize,
-    #[bincode(skip, default = "FxHashMap::default")]
     scheduled_tasks: FxHashMap<TaskId, TaskPriority>,
     #[cfg(feature = "trace_aggregation_update_stats")]
     pub stats: AggregationUpdateQueueStats,
@@ -1177,8 +1046,7 @@ impl AggregationUpdateQueue {
         let _ = self.try_enqueue_optimize_job(task.id(), true);
     }
 
-    /// Runs the job and all dependent jobs until it's done. It can persist the operation, so
-    /// following code might not be executed when persisted.
+    /// Runs the job and all dependent jobs until it's done.
     pub fn run(job: AggregationUpdateJob, ctx: &mut impl ExecuteContext<'_>) {
         let mut queue = Self::new();
         queue.push(job);
@@ -1258,7 +1126,6 @@ impl AggregationUpdateQueue {
         if let Some(job) = self.jobs.pop_front() {
             let job: AggregationUpdateJobGuard = job.entered();
             match job.job {
-                AggregationUpdateJob::Noop => {}
                 AggregationUpdateJob::UpdateAggregationNumber { .. }
                 | AggregationUpdateJob::BalanceEdge { .. } => {
                     // These jobs are never pushed to the queue
@@ -1400,17 +1267,6 @@ impl AggregationUpdateQueue {
                         }
                         self.inner_of_upper_has_new_followers(ctx, new_follower_ids, upper_id);
                     }
-                }
-                AggregationUpdateJob::InnerOfUpperHasNewFollower {
-                    upper_id,
-                    new_follower_id,
-                } => {
-                    #[cfg(feature = "trace_aggregation_update_stats")]
-                    {
-                        self.stats.new_followers += 1;
-                        self.stats.inner_of_upper_has_new_follower += 1;
-                    }
-                    self.inner_of_upper_has_new_follower(ctx, new_follower_id, upper_id, 1);
                 }
                 AggregationUpdateJob::InnerOfUpperLostFollower {
                     lost_follower_id,
@@ -3390,7 +3246,7 @@ impl AggregationUpdateQueue {
             // For performance reasons this should stay `Meta` and not `All`
             AGGREGATION_UPDATE_CATEGORY,
         );
-        // Skip deleted tasks, GC can run during suspend points of aggregation updates
+        // Skip deleted tasks, which can be encountered while processing GC's deferred cleanup.
         // This just means there is no point in rebalancing the subgraph here since this 'root' is
         // dead.
         if task.deleted() {
@@ -3628,7 +3484,6 @@ impl AggregationUpdateQueue {
         ctx: &mut impl ExecuteContext<'_>,
     ) -> AggregationUpdateQueueStats {
         loop {
-            ctx.operation_suspend_point(&self);
             if self.process(ctx) {
                 return self.stats;
             }
@@ -3639,10 +3494,27 @@ impl AggregationUpdateQueue {
 impl Operation for AggregationUpdateQueue {
     fn execute(mut self, ctx: &mut impl ExecuteContext<'_>) {
         loop {
-            ctx.operation_suspend_point(&self);
             if self.process(ctx) {
                 return;
             }
+        }
+    }
+}
+
+/// Drain related queues fairly. A removal can be waiting for an add in a different queue;
+/// finishing each queue in isolation would exhaust its retry budget before that add runs.
+pub fn execute_aggregation_queues(
+    queues: impl IntoIterator<Item = AggregationUpdateQueue>,
+    ctx: &mut impl ExecuteContext<'_>,
+) {
+    run_fair(queues, |queue| queue.process(ctx));
+}
+
+fn run_fair<T>(queues: impl IntoIterator<Item = T>, mut step: impl FnMut(&mut T) -> bool) {
+    let mut queues: VecDeque<_> = queues.into_iter().collect();
+    while let Some(mut queue) = queues.pop_front() {
+        if !step(&mut queue) {
+            queues.push_back(queue);
         }
     }
 }
@@ -3710,5 +3582,26 @@ fn retry_loop(mut retry: u16, mut f: impl FnMut() -> ControlFlow<()>) -> Result<
         } else {
             time = Some(Instant::now());
         }
+    }
+}
+
+#[cfg(test)]
+mod fair_queue_tests {
+    use super::run_fair;
+
+    #[test]
+    fn waiting_removal_allows_later_add_to_run() {
+        let mut added = false;
+        let mut order = Vec::new();
+        run_fair(["remove", "add"], |job| {
+            order.push(*job);
+            if *job == "add" {
+                added = true;
+                true
+            } else {
+                added
+            }
+        });
+        assert_eq!(order, ["remove", "add", "remove"]);
     }
 }

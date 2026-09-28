@@ -14,7 +14,6 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use bincode::{Decode, Encode};
 use parking_lot::RwLockReadGuard;
 use tracing::info_span;
 #[cfg(feature = "trace_prepare_tasks")]
@@ -25,7 +24,9 @@ use turbo_tasks::{
     macro_helpers::NativeFunction,
 };
 
-pub use self::aggregation_update::ComputeDirtyAndCleanUpdate;
+pub use self::aggregation_update::{
+    AggregationUpdateQueue, ComputeDirtyAndCleanUpdate, execute_aggregation_queues,
+};
 use crate::{
     backend::{
         EventDescription, TaskDataCategory, TurboTasksBackend,
@@ -37,7 +38,7 @@ use crate::{
     data::{ActivenessState, CollectibleRef, Dirtyness, InProgressState, TransientTask},
 };
 
-pub trait Operation: Encode + Decode<()> + Default + TryFrom<AnyOperation, Error = ()> {
+pub trait Operation {
     fn execute(self, ctx: &mut impl ExecuteContext<'_>);
 }
 
@@ -181,9 +182,6 @@ pub trait ExecuteContext<'e>: Sized {
     ) -> (Self::TaskGuardImpl, Self::TaskGuardImpl);
     fn schedule_task(&self, task: &Self::TaskGuardImpl, parent_priority: TaskPriority);
     fn get_current_task_priority(&self) -> TaskPriority;
-    fn operation_suspend_point<T>(&mut self, op: &T)
-    where
-        T: Clone + Into<AnyOperation>;
     /// Record `task` as a GC candidate **if it is in fact collectible**.
     ///
     /// Call this wherever an operation removes the last reference of some kind to a task. This may
@@ -263,10 +261,7 @@ impl TaskLockCounter {
 }
 
 enum ExecutePhase<'e> {
-    Normal {
-        guard: Option<OperationGuard<'e, AnyOperation>>,
-    },
-    Child,
+    Normal,
     Gc(&'e dyn Fn(TaskId)),
 }
 
@@ -274,6 +269,8 @@ pub struct ExecuteContextImpl<'e> {
     backend: &'e TurboTasksBackend,
     turbo_tasks: &'e TurboTasks<TurboTasksBackend>,
     phase: ExecutePhase<'e>,
+    /// Held until all graph changes made by this context have completed.
+    _operation_guard: Option<OperationGuard<'e>>,
     /// Held by contexts built through `TurboTasksBackend::try_execute_context`, so that storage
     /// teardown in `stop()` waits for this context to be dropped.
     _shutdown_guard: Option<RwLockReadGuard<'e, bool>>,
@@ -288,9 +285,8 @@ impl<'e> ExecuteContextImpl<'e> {
         Self {
             backend,
             turbo_tasks,
-            phase: ExecutePhase::Normal {
-                guard: backend.start_operation(),
-            },
+            phase: ExecutePhase::Normal,
+            _operation_guard: backend.start_operation(),
             _shutdown_guard: None,
             task_lock_counter: TaskLockCounter::new(),
         }
@@ -307,9 +303,8 @@ impl<'e> ExecuteContextImpl<'e> {
         Self {
             backend,
             turbo_tasks,
-            phase: ExecutePhase::Normal {
-                guard: backend.start_operation(),
-            },
+            phase: ExecutePhase::Normal,
+            _operation_guard: backend.start_operation(),
             _shutdown_guard: Some(shutdown_guard),
             task_lock_counter: TaskLockCounter::new(),
         }
@@ -324,13 +319,14 @@ impl<'e> ExecuteContextImpl<'e> {
     pub(super) fn new_for_gc(
         backend: &'e TurboTasksBackend,
         turbo_tasks: &'e TurboTasks<TurboTasksBackend>,
-        _phase: &'e SnapshotPhase<'_, AnyOperation>,
+        _phase: &'e SnapshotPhase<'_>,
         gc_collectible: &'e dyn Fn(TaskId),
     ) -> Self {
         Self {
             backend,
             turbo_tasks,
             phase: ExecutePhase::Gc(gc_collectible),
+            _operation_guard: None,
             _shutdown_guard: None,
             task_lock_counter: TaskLockCounter::new(),
         }
@@ -1364,13 +1360,6 @@ impl<'e> ExecuteContext<'e> for ExecuteContextImpl<'e> {
         self.turbo_tasks.get_current_task_priority()
     }
 
-    fn operation_suspend_point<T: Clone + Into<AnyOperation>>(&mut self, op: &T) {
-        let ExecutePhase::Normal { guard: Some(guard) } = &mut self.phase else {
-            return;
-        };
-        guard.suspend_point(|| op.clone().into());
-    }
-
     fn note_maybe_collectible(&mut self, task: &impl TaskGuard) {
         if let ExecutePhase::Gc(collector) = self.phase
             && task.is_gc_collectible()
@@ -1435,7 +1424,8 @@ impl<'e> ChildExecuteContext<'e> for ChildExecuteContextImpl<'e> {
         ExecuteContextImpl {
             backend: self.backend,
             turbo_tasks: self.turbo_tasks,
-            phase: ExecutePhase::Child,
+            phase: ExecutePhase::Normal,
+            _operation_guard: None,
             // A child context runs inside its parent's execution, which the foreground drain
             // already waits for, so it needs no shutdown guard of its own.
             _shutdown_guard: None,
@@ -2025,74 +2015,18 @@ impl TaskStorageAccessors for TaskGuardImpl<'_> {
     }
 }
 
-macro_rules! impl_operation {
-    ($name:ident $type_path:path) => {
-        impl From<$type_path> for AnyOperation {
-            fn from(op: $type_path) -> Self {
-                AnyOperation::$name(op)
-            }
-        }
-
-        impl TryFrom<AnyOperation> for $type_path {
-            type Error = ();
-
-            fn try_from(op: AnyOperation) -> Result<Self, Self::Error> {
-                match op {
-                    AnyOperation::$name(op) => Ok(op),
-                    _ => Err(()),
-                }
-            }
-        }
-
-        pub use $type_path;
-    };
-}
-
-#[derive(Encode, Decode, Clone)]
-pub enum AnyOperation {
-    ConnectChild(connect_child::ConnectChildOperation),
-    Invalidate(invalidate::InvalidateOperation),
-    UpdateCell(update_cell::UpdateCellOperation),
-    CleanupOldEdges(cleanup_old_edges::CleanupOldEdgesOperation),
-    AggregationUpdate(aggregation_update::AggregationUpdateQueue),
-    LeafDistanceUpdate(leaf_distance_update::LeafDistanceUpdateQueue),
-    Nested(Vec<AnyOperation>),
-}
-
-impl AnyOperation {
-    pub fn execute(self, ctx: &mut impl ExecuteContext<'_>) {
-        match self {
-            AnyOperation::ConnectChild(op) => op.execute(ctx),
-            AnyOperation::Invalidate(op) => op.execute(ctx),
-            AnyOperation::UpdateCell(op) => op.execute(ctx),
-            AnyOperation::CleanupOldEdges(op) => op.execute(ctx),
-            AnyOperation::AggregationUpdate(op) => op.execute(ctx),
-            AnyOperation::LeafDistanceUpdate(op) => op.execute(ctx),
-            AnyOperation::Nested(ops) => {
-                for op in ops {
-                    op.execute(ctx);
-                }
-            }
-        }
-    }
-}
-
-impl_operation!(ConnectChild connect_child::ConnectChildOperation);
-impl_operation!(Invalidate invalidate::InvalidateOperation);
-impl_operation!(UpdateCell update_cell::UpdateCellOperation);
-impl_operation!(CleanupOldEdges cleanup_old_edges::CleanupOldEdgesOperation);
-impl_operation!(AggregationUpdate aggregation_update::AggregationUpdateQueue);
-impl_operation!(LeafDistanceUpdate leaf_distance_update::LeafDistanceUpdateQueue);
-
 pub use self::{
     aggregation_update::{
         AggregatedDataUpdate, AggregationUpdateJob, get_aggregation_number, get_uppers,
         is_aggregating_node, is_root_node,
     },
-    cleanup_old_edges::{OutdatedEdge, capture_all_edges},
+    cleanup_old_edges::{CleanupOldEdgesOperation, OutdatedEdge, capture_all_edges},
+    connect_child::connect_child,
     connect_children::connect_children,
-    invalidate::make_task_dirty_internal,
+    invalidate::{invalidate, make_task_dirty_internal},
+    leaf_distance_update::LeafDistanceUpdateQueue,
     prepare_new_children::prepare_new_children,
+    update_cell::update_cell,
     update_collectible::UpdateCollectibleOperation,
 };
 

@@ -7,7 +7,7 @@ mod util;
 use anyhow::Result;
 use turbo_tasks::{ResolvedVc, State, TaskId, Vc};
 
-use crate::util::create_tt;
+use crate::util::{create_tt, create_tt_with_workers};
 
 /// The `TaskId` backing a resolved `Vc` (its `TaskOutput` node).
 fn task_id_of<T>(vc: Vc<T>) -> TaskId {
@@ -169,6 +169,39 @@ async fn parent_count_not_double_counted_on_revalidation() {
             );
         }
 
+        anyhow::Ok(())
+    })
+    .await;
+    tt.stop_and_wait().await;
+    result.unwrap();
+}
+
+#[turbo_tasks::function(root)]
+fn wide_parent() -> Vc<u32> {
+    for n in 0..10_000 {
+        let _ = leaf(n);
+    }
+    Vc::cell(42)
+}
+
+/// Connecting the children and propagating their graph edges must finish together, including
+/// when the scope has no helper worker available.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parallel_connect_children_counts_all_children() {
+    let (tt, _persistence_dir) = create_tt_with_workers("parallel_connect_children", 1);
+    let tt2 = tt.clone();
+
+    let result = turbo_tasks::run_once(tt.clone(), async move {
+        assert_eq!(*wide_parent().strongly_consistent().await?, 42);
+        assert_eq!(
+            tt2.backend().parent_count_for_testing(task_id_of(leaf(0))),
+            1
+        );
+        assert_eq!(
+            tt2.backend()
+                .parent_count_for_testing(task_id_of(leaf(9_999))),
+            1
+        );
         anyhow::Ok(())
     })
     .await;

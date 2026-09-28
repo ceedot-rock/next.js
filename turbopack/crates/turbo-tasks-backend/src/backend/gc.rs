@@ -29,7 +29,7 @@ use turbo_tasks::{TaskId, TurboTasks, scope_unbounded::scope_unbounded_with};
 
 use crate::{
     backend::{
-        AnyOperation, TurboTasksBackend,
+        TurboTasksBackend,
         operation::{
             AggregationUpdateJob, AggregationUpdateQueue, CleanupOldEdgesOperation, ExecuteContext,
             ExecuteContextImpl, TaskGuard, capture_all_edges,
@@ -73,7 +73,7 @@ enum GcJob {
 
 /// Decides when a GC pass should stop early because it is delaying real work.
 struct GcBudget<'a> {
-    phase: &'a SnapshotPhase<'a, AnyOperation>,
+    phase: &'a SnapshotPhase<'a>,
     started: Instant,
     /// The minimum quantum of work this pass does before any interrupt is honoured.
     min_progress: Duration,
@@ -208,7 +208,7 @@ impl TurboTasksBackend {
     pub(crate) fn gc_collect(
         &self,
         turbo_tasks: &TurboTasks<TurboTasksBackend>,
-        phase: &SnapshotPhase<'_, AnyOperation>,
+        phase: &SnapshotPhase<'_>,
         interruptible: bool,
     ) -> (GcStats, GcPassResult, Option<Vec<(TaskId, TtlCounter)>>) {
         // Record the time at the beginning of the loop to have a consistent timestamp for the roots
@@ -458,11 +458,9 @@ impl TurboTasksBackend {
         // Persist the roots map this pass produced. Some tests query the roots set and GC itself
         // does as well, this ensures it is available to the next cycle.
         if let Some(roots) = roots
-            && let Err(err) = self.backing_storage.save_snapshot(
-                Vec::new(),
-                Some(roots),
-                Vec::<Vec<SnapshotItem>>::new(),
-            )
+            && let Err(err) = self
+                .backing_storage
+                .save_snapshot(Some(roots), Vec::<Vec<SnapshotItem>>::new())
         {
             panic!("gc_for_testing: failed to persist GC roots: {err:?}");
         }

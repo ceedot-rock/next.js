@@ -11,8 +11,10 @@ use turbo_tasks::{
 use crate::backend::{
     operation::{
         AggregationUpdateJob, AggregationUpdateQueue, ChildExecuteContext, ExecuteContext,
-        Operation, TaskGuard, aggregation_update::InnerOfUppersHasNewFollowersJob,
-        get_aggregation_number, get_uppers, invalidate::make_task_dirty_internal,
+        TaskGuard,
+        aggregation_update::{InnerOfUppersHasNewFollowersJob, execute_aggregation_queues},
+        get_aggregation_number, get_uppers,
+        invalidate::make_task_dirty_internal,
         is_aggregating_node,
     },
     storage_schema::TaskStorageAccessors,
@@ -53,15 +55,14 @@ pub fn connect_children(
         parent_task_id: TaskId,
         parent_has_active_count: bool,
         should_track_activeness: bool,
-    ) {
+    ) -> AggregationUpdateQueue {
         debug_assert!(!new_follower_ids.is_empty());
 
         let mut queue = AggregationUpdateQueue::new();
 
         // Single pass over the newly-connected children, two things per child under one guard:
         //
-        // 1. Bump the child-side parent reference count. it is important to do this before any
-        //    suspend points persistence/GC cannot run
+        // 1. Bump the child-side parent reference count before graph propagation.
         //
         // 2. Make any child that has not produced output yet dirty, so it gets scheduled and
         //    computes.
@@ -151,21 +152,7 @@ pub fn connect_children(
             });
         }
 
-        {
-            #[cfg(any(
-                feature = "trace_task_completion",
-                feature = "trace_aggregation_update_stats"
-            ))]
-            let _span = tracing::trace_span!("connect new children", stats = tracing::field::Empty)
-                .entered();
-            #[cfg(feature = "trace_aggregation_update_stats")]
-            {
-                let stats = queue.execute_with_stats(ctx);
-                _span.record("stats", tracing::field::debug(stats));
-            }
-            #[cfg(not(feature = "trace_aggregation_update_stats"))]
-            queue.execute(ctx);
-        }
+        queue
     }
 
     // Connecting a child varies a lot, but it's in the range of 10-30µs.
@@ -182,7 +169,7 @@ pub fn connect_children(
     if len >= CONNECT_CHILDREN_PARALLELIZATION_THRESHOLD {
         let new_follower_ids = new_follower_ids.into_vec();
         let chunk_size = good_chunk_size(len);
-        let _ = scope_bounded(len.div_ceil(chunk_size), |scope| {
+        let queues = scope_bounded(len.div_ceil(chunk_size), |scope| {
             for chunk in into_chunks(new_follower_ids, chunk_size) {
                 let upper_ids = &upper_ids;
                 let child_ctx = ctx.child_context();
@@ -196,12 +183,14 @@ pub fn connect_children(
                         parent_task_id,
                         parent_has_active_count,
                         should_track_activeness,
-                    );
+                    )
                 });
             }
-        });
+        })
+        .collect::<Vec<_>>();
+        execute_aggregation_queues(queues, ctx);
     } else {
-        process_new_children(
+        let queue = process_new_children(
             ctx,
             new_follower_ids,
             upper_ids,
@@ -209,5 +198,18 @@ pub fn connect_children(
             parent_has_active_count,
             should_track_activeness,
         );
+        #[cfg(any(
+            feature = "trace_task_completion",
+            feature = "trace_aggregation_update_stats"
+        ))]
+        let _span =
+            tracing::trace_span!("connect new children", stats = tracing::field::Empty).entered();
+        #[cfg(feature = "trace_aggregation_update_stats")]
+        {
+            let stats = queue.execute_with_stats(ctx);
+            _span.record("stats", tracing::field::debug(stats));
+        }
+        #[cfg(not(feature = "trace_aggregation_update_stats"))]
+        crate::backend::operation::Operation::execute(queue, ctx);
     }
 }
