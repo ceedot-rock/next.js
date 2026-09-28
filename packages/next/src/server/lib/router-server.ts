@@ -253,26 +253,34 @@ export async function initialize(opts: {
           return false
         }
       )
-      if (process.env.NEXT_PRIVATE_UPGRADE_PROMPT === '1' && process.send) {
-        // TODO: Do not block dev startup while prompting for an upgrade.
-        // Preserve all logs for display after the prompt and stop dev before Update.
-        // The existing dev worker pauses here while its parent owns the menu.
-        await new Promise<void>((resolve) => {
-          const resume = (message: {
-            nextUpgradeContinue: boolean | undefined
-          }) => {
-            if (message.nextUpgradeContinue) {
-              process.off('message', resume)
-              resolve()
-            }
+      // Keep upgrade assessment and the human prompt in the worker without
+      // blocking dev startup. The worker sends its choice to the CLI parent.
+      void nudgeUpgrade(
+        opts.dir,
+        upgradeContext,
+        'dev',
+        process.env.NEXT_PRIVATE_UPGRADE_SKIPPED_POLICY === policy
+          ? null
+          : process.send
+            ? new AbortController().signal
+            : null
+      )
+        .then((action) => {
+          if (
+            action === 'update' &&
+            upgradeContext.experimental.agenticAutoUpgrade
+          ) {
+            process.send?.({
+              upgradePromptAction: 'update',
+              policy: upgradeContext.experimental.agenticAutoUpgrade,
+            })
+          } else if (action === 'interrupt') {
+            process.send?.({ upgradePromptAction: 'interrupt' })
+          } else if (action === 'skip' && policy) {
+            process.send?.({ upgradePromptAction: 'skip', policy })
           }
-          process.on('message', resume)
-          process.send!({
-            nextUpgradeContext: upgradeContext,
-          })
         })
-      } else {
-        void nudgeUpgrade(opts.dir, developmentConfig, 'dev').catch((error) => {
+        .catch((error) => {
           const { printAndExit } =
             require('./utils') as typeof import('./utils')
           const exitCode =
@@ -284,7 +292,6 @@ export async function initialize(opts: {
             typeof exitCode === 'number' ? exitCode : 1
           )
         })
-      }
     }
 
     // Resolve the effective serverFastRefresh value.
