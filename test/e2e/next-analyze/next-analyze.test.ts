@@ -94,7 +94,17 @@ describe('next analyze', () => {
   })
 
   it('dumps a versioned graph and replays the saved snapshot on demand', async () => {
-    const fresh = await next.runCommand(['analyze', '--output=json'])
+    const started = Date.now()
+    const fresh = await next.runCommand([
+      'analyze',
+      '--output=json',
+      '--snapshot-name',
+      'JSON snapshot',
+    ])
+    // Log the real fixture's output size and elapsed time without pasting its graph.
+    console.log(
+      `Analyzer NDJSON fixture: ${Buffer.byteLength(fresh.stdout)} bytes in ${Date.now() - started}ms`
+    )
     expect(fresh.exitCode).toBe(0)
     expect(fresh.stderr).toContain('Analyzing a production build')
     const records = fresh.stdout
@@ -112,6 +122,7 @@ describe('next analyze', () => {
       readFileSync(path.join(analyzeDir, 'history/history.json'), 'utf8')
     )
     const id = history.snapshots[0].id
+    expect(history.snapshots[0].snapshotName).toBe('JSON snapshot')
     expect(records[0].snapshot_id).toBe(id)
     expect(
       existsSync(path.join(analyzeDir, 'history', id, 'graph.ndjson'))
@@ -133,6 +144,14 @@ describe('next analyze', () => {
     ])
     expect(replayAgain.exitCode).toBe(0)
     expect(replayAgain.stdout).toBe(replay.stdout)
+    const alias = await next.runCommand([
+      'experimental-analyze',
+      '--output=json',
+      '--snapshot',
+      id,
+    ])
+    expect(alias.exitCode).toBe(0)
+    expect(alias.stdout).toBe(replay.stdout)
     expect(replay.stderr).not.toContain('Analyzing a production build')
     const root = await next.runCommand([
       'analyze',
@@ -174,6 +193,15 @@ describe('next analyze', () => {
     ])
     expect(traversal.exitCode).not.toBe(0)
     expect(traversal.stdout).toBe('')
+    for (const args of [
+      ['analyze', '--output=xml'],
+      ['analyze', '--route', '/'],
+      ['analyze', '--snapshot', id],
+    ]) {
+      const invalid = await next.runCommand(args)
+      expect(invalid.exitCode).not.toBe(0)
+      expect(invalid.stdout).toBe('')
+    }
 
     const moduleFile = path.join(analyzeDir, 'history', id, 'modules.data')
     const original = readFileSync(moduleFile)
@@ -222,6 +250,37 @@ describe('next analyze', () => {
     } finally {
       writeFileSync(moduleFile, original)
     }
+  })
+
+  it('replays a snapshot created by next build --analyze', async () => {
+    const build = await next.runCommand(['build', '--analyze'])
+    if (build.exitCode !== 0) {
+      throw new Error(
+        `next build --analyze failed: ${build.stderr}\n${build.stdout}`
+      )
+    }
+    const analyzeDir = path.join(next.testDir, '.next/diagnostics/analyze')
+    const history = JSON.parse(
+      readFileSync(path.join(analyzeDir, 'history/history.json'), 'utf8')
+    )
+    const id = history.snapshots[0].id
+    const replay = await next.runCommand([
+      'analyze',
+      '--output=json',
+      '--snapshot',
+      id,
+    ])
+    expect(replay.exitCode).toBe(0)
+    expect(
+      replay.stdout
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line))[0]
+    ).toMatchObject({
+      type: 'meta',
+      snapshot_id: id,
+    })
+    expect(replay.stderr).not.toContain('Analyzing a production build')
   })
   ;['-o', '--output'].forEach((flag) => {
     describe(`with ${flag} flag`, () => {
