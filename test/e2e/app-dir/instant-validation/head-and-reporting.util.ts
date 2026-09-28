@@ -1759,17 +1759,17 @@ export function registerHeadAndReportingTests(
                 getRouteInBuild(ensureStaticConfig)
               )
               const error = extractBuildValidationError(result.cliOutput)
-              expect(error).toMatch(errorPattern)
+              expect(error).toMatch(INSTANT_INSIGHT_PATTERNS.prefetch)
               expect(error).toMatchInlineSnapshot(`
-               "Error: Route "/shells/ensure-static/false/prefetch-without-suspense": Next.js encountered URL data during prerendering or a navigation.
+               "Error: Route "/shells/ensure-static/false/prefetch-without-suspense": Next.js encountered \`prefetch()\` during prerendering or a navigation.
 
-               \`params\` or \`searchParams\` accessed outside of \`<Suspense>\` may prevent the navigation from being instant, leading to a slower user experience.
+               \`prefetch()\` called outside of \`<Suspense>\` may prevent the navigation from being instant, leading to a slower user experience.
 
                Ways to fix this:
                  - [stream] Provide a placeholder with \`<Suspense fallback={...}>\` around the data access
                  - [block] Set \`export const instant = false\` to allow a blocking route
 
-               Learn more: https://nextjs.org/docs/messages/instant-shell-url-data
+               Learn more: https://nextjs.org/docs/messages/instant-navigation-stage
                    at main (<anonymous>)
                    at body (<anonymous>)
                    at html (<anonymous>)
@@ -2022,7 +2022,7 @@ export function registerHeadAndReportingTests(
                  - [stream] Provide a placeholder with \`<Suspense fallback={...}>\` around the data access
                  - [block] Set \`export const instant = false\` to allow a blocking route
 
-               Learn more: https://nextjs.org/docs/messages/instant-shell-url-data
+               Learn more: https://nextjs.org/docs/messages/instant-navigation-stage
                    at main (<anonymous>)
                    at body (<anonymous>)
                    at html (<anonymous>)
@@ -2083,7 +2083,7 @@ export function registerHeadAndReportingTests(
                  - [stream] Provide a placeholder with \`<Suspense fallback={...}>\` around the data access
                  - [block] Set \`export const instant = false\` to allow a blocking route
 
-               Learn more: https://nextjs.org/docs/messages/instant-shell-url-data
+               Learn more: https://nextjs.org/docs/messages/instant-navigation-stage
                    at main (<anonymous>)
                    at body (<anonymous>)
                    at html (<anonymous>)
@@ -2144,7 +2144,7 @@ export function registerHeadAndReportingTests(
                  - [stream] Provide a placeholder with \`<Suspense fallback={...}>\` around the data access
                  - [block] Set \`export const instant = false\` to allow a blocking route
 
-               Learn more: https://nextjs.org/docs/messages/instant-shell-url-data
+               Learn more: https://nextjs.org/docs/messages/instant-navigation-stage
                    at main (<anonymous>)
                    at body (<anonymous>)
                    at html (<anonymous>)
@@ -2205,7 +2205,7 @@ export function registerHeadAndReportingTests(
                  - [stream] Provide a placeholder with \`<Suspense fallback={...}>\` around the data access
                  - [block] Set \`export const instant = false\` to allow a blocking route
 
-               Learn more: https://nextjs.org/docs/messages/instant-shell-url-data
+               Learn more: https://nextjs.org/docs/messages/instant-navigation-stage
                    at main (<anonymous>)
                    at body (<anonymous>)
                    at html (<anonymous>)
