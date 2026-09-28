@@ -277,6 +277,10 @@ program
   })
   .usage('[directory] [options]')
 
+const jsonAnalyzeOutput =
+  ['analyze', 'experimental-analyze'].includes(process.argv[2]) &&
+  process.argv.includes('--output=json')
+
 program
   .command('analyze')
   .alias('experimental-analyze')
@@ -298,7 +302,15 @@ program
   )
   .option(
     '-o, --output',
-    'Only write analysis files to disk. Does not start the server.'
+    'Write analysis files without starting the server; use --output=json to dump graph records to stdout.'
+  )
+  .option(
+    '--snapshot <id>',
+    'Dump an existing analyzer snapshot (requires --output=json).'
+  )
+  .option(
+    '--route <route>',
+    'Filter graph records to a route (requires --output=json).'
   )
   .addOption(
     new Option(
@@ -311,14 +323,23 @@ program
       .env('PORT')
   )
   .action((directory: string, options: NextAnalyzeOptions) => {
+    if (jsonAnalyzeOutput) options.output = 'json'
     return import('../cli/next-analyze.js')
       .then((mod) => mod.nextAnalyze(options, directory))
       .then(() => {
-        if (options.output) {
+        if (options.output === 'json') {
+          // JSON output can be much larger than a pipe's buffer. Exit only after
+          // all queued lines have been written, or a successful run loses its tail.
+          process.stdout.end(() => process.exit(0))
+        } else if (options.output) {
           // The Next.js process is held open by something on the event loop. Exit manually like the `build` command does.
           // TODO: Fix the underlying issue so this is not necessary.
           process.exit(0)
         }
+      })
+      .catch((error) => {
+        console.error(error)
+        process.exit(1)
       })
   })
 
@@ -832,4 +853,8 @@ internal
   )
   .usage('[directory] [options]')
 
-program.parse(process.argv)
+program.parse(
+  jsonAnalyzeOutput
+    ? process.argv.map((arg) => (arg === '--output=json' ? '--output' : arg))
+    : process.argv
+)
