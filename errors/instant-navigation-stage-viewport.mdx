@@ -22,7 +22,7 @@ kind: insight
   come back here for the specific fix.
 </div>
 
-During prerendering or a client-side navigation, [`generateViewport()`](/docs/app/api-reference/functions/generate-viewport) called [`unstable_prefetch()`](/docs/app/api-reference/functions/prefetch) or [`unstable_navigation()`](/docs/app/api-reference/functions/navigation). `unstable_prefetch()` delays the viewport until a per-link prefetch or navigation. `unstable_navigation()` delays it until navigation.
+During prerendering or a client-side navigation, [`generateViewport()`](/docs/app/api-reference/functions/generate-viewport) called [`prefetch()`](/docs/app/api-reference/functions/prefetch) or [`navigation()`](/docs/app/api-reference/functions/navigation). `prefetch()` delays the viewport until a per-link prefetch or navigation. `navigation()` delays it until navigation.
 
 Next.js needs the viewport before it can complete the route's [App Shell](/docs/app/glossary#app-shell). Holding the viewport until a later stage prevents Next.js from creating the App Shell and can make navigation slower. If the later timing is not intentional, remove the API call. If it is intentional, you can leave the behavior unchanged. To stop reporting the insight, disable validation for the segment.
 
@@ -37,7 +37,7 @@ For the same insight in the page body or metadata code, see [navigation stage AP
     href="#remove-the-api-call"
     snippets={[
       { text: 'async function generateViewport() {' },
-      { text: '-  await unstable_navigation()', highlight: true },
+      { text: '-  await navigation()', highlight: true },
       { text: '}' },
     ]}
   />
@@ -54,13 +54,13 @@ For the same insight in the page body or metadata code, see [navigation stage AP
 
 ## Remove the API call
 
-Choose this fix when you do not need to control when the viewport is included. Remove `unstable_prefetch()` or `unstable_navigation()` from [`generateViewport()`](/docs/app/api-reference/functions/generate-viewport). Keep `generateViewport()` and its existing caching.
+Choose this fix when you do not need to control when the viewport is included. Remove `prefetch()` or `navigation()` from [`generateViewport()`](/docs/app/api-reference/functions/generate-viewport). Keep `generateViewport()` and its existing caching.
 
 ### Patterns
 
 #### Remove the API call
 
-Remove the call to `unstable_prefetch()` or `unstable_navigation()`.
+Remove the call to `prefetch()` or `navigation()`.
 
 ```jsx filename="app/dashboard/layout.js"
 import { getViewport } from './data'

@@ -22,7 +22,7 @@ kind: insight
   come back here for the specific fix.
 </div>
 
-During prerendering or a client-side navigation, [`generateMetadata()`](/docs/app/api-reference/functions/generate-metadata) called [`unstable_prefetch()`](/docs/app/api-reference/functions/prefetch) or [`unstable_navigation()`](/docs/app/api-reference/functions/navigation). These [navigation stage APIs](/docs/app/glossary#navigation-stages) delay the metadata work until a per-link prefetch or navigation, depending on which API you use.
+During prerendering or a client-side navigation, [`generateMetadata()`](/docs/app/api-reference/functions/generate-metadata) called [`prefetch()`](/docs/app/api-reference/functions/prefetch) or [`navigation()`](/docs/app/api-reference/functions/navigation). These [navigation stage APIs](/docs/app/glossary#navigation-stages) delay the metadata work until a per-link prefetch or navigation, depending on which API you use.
 
 Metadata can already stream, so delaying it may be unintentional. Remove the API call if you do not need the delay. Otherwise, confirm that the metadata delay is intentional.
 
@@ -37,7 +37,7 @@ For the same insight in the page body or viewport code, see [navigation stage AP
     href="#remove-the-api-call"
     snippets={[
       { text: 'async function generateMetadata() {' },
-      { text: '-  await unstable_navigation()', highlight: true },
+      { text: '-  await navigation()', highlight: true },
       { text: '}' },
     ]}
   />
@@ -47,20 +47,20 @@ For the same insight in the page body or viewport code, see [navigation stage AP
     href="#confirm-the-metadata-delay"
     snippets={[
       { text: '// page.tsx or layout.tsx' },
-      { text: 'await unstable_navigation()', highlight: true },
+      { text: 'await navigation()', highlight: true },
     ]}
   />
 </FixCardGrid>
 
 ## Remove the API call
 
-Choose this fix when you do not need to control when the metadata is included. Remove `unstable_prefetch()` or `unstable_navigation()` from [`generateMetadata()`](/docs/app/api-reference/functions/generate-metadata). Keep `generateMetadata()` and its existing caching.
+Choose this fix when you do not need to control when the metadata is included. Remove `prefetch()` or `navigation()` from [`generateMetadata()`](/docs/app/api-reference/functions/generate-metadata). Keep `generateMetadata()` and its existing caching.
 
 ### Patterns
 
 #### Remove the API call
 
-Remove the call to `unstable_prefetch()` or `unstable_navigation()`.
+Remove the call to `prefetch()` or `navigation()`.
 
 ```jsx filename="app/dashboard/page.js"
 import { getMetadata } from './data'
@@ -94,20 +94,20 @@ This insight appears because metadata is the only part of the route delayed to t
 
 Create the marker and render it inside [`<Suspense>`](https://react.dev/reference/react/Suspense). The existing page content remains available at its current stages.
 
-This example uses [`unstable_navigation()`](/docs/app/api-reference/functions/navigation). If `generateMetadata()` calls [`unstable_prefetch()`](/docs/app/api-reference/functions/prefetch), call `unstable_prefetch()` in the marker instead.
+This example uses [`navigation()`](/docs/app/api-reference/functions/navigation). If `generateMetadata()` calls [`prefetch()`](/docs/app/api-reference/functions/prefetch), call `prefetch()` in the marker instead.
 
 ```jsx filename="app/dashboard/page.js"
 import { Suspense } from 'react'
-import { unstable_navigation } from 'next/cache'
+import { navigation } from 'next/cache'
 import { getMetadata } from './data'
 
 export async function generateMetadata() {
-  await unstable_navigation()
+  await navigation()
   return getMetadata()
 }
 
 async function NavigationStageMarker() {
-  await unstable_navigation()
+  await navigation()
   return null
 }
 

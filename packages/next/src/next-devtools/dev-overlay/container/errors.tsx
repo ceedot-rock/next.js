@@ -6,6 +6,7 @@ import React, {
   useRef,
   useState,
 } from 'react'
+import { VulnerabilityInsight } from '../components/vulnerability-insight/vulnerability-insight'
 import type { DebugInfo } from '../../shared/types'
 import { Overlay, OverlayBackdrop } from '../components/overlay'
 import { RuntimeError } from './runtime-error'
@@ -53,6 +54,7 @@ interface ErrorsProps extends ErrorBaseProps {
   runtimeErrors: ReadyRuntimeError[]
   debugInfo: DebugInfo
   onClose: () => void
+  hasVulnerabilityInsight: boolean
 }
 
 function matchLinkType(text: string): string | null {
@@ -366,10 +368,10 @@ export function getGuidanceVariant(message: string): GuidanceVariant {
   // Discriminates between `createNavigationBodyErrorInNavigation`,
   // `createLinkBodyErrorInNavigation`, `createRuntimeBodyError`, and
   // `createDynamicBodyError` (and their in-navigation variants).
-  if (message.includes('encountered `unstable_navigation()`')) {
+  if (message.includes('encountered `navigation()`')) {
     return 'navigation'
   }
-  if (message.includes('encountered `unstable_prefetch()`')) {
+  if (message.includes('encountered `prefetch()`')) {
     return 'prefetch'
   }
   if (
@@ -425,8 +427,8 @@ export function isSyncIOClientError(message: string): boolean {
 }
 
 // Detects Instant Insights emitted during navigation validation. Body errors
-// identify the navigation in their message. `unstable_prefetch()` and
-// `unstable_navigation()` in metadata and viewport use dedicated docs URLs
+// identify the navigation in their message. `prefetch()` and
+// `navigation()` in metadata and viewport use dedicated docs URLs
 // because their messages describe the affected API instead of the validation
 // phase.
 export function isBlockingRouteInNavError(message: string): boolean {
@@ -669,6 +671,7 @@ export function Errors({
   runtimeErrors,
   debugInfo,
   onClose,
+  hasVulnerabilityInsight,
   ...props
 }: ErrorsProps) {
   const dialogResizerRef = useRef<HTMLDivElement | null>(null)
@@ -686,6 +689,8 @@ export function Errors({
     return { normalErrors: normal, instantErrors: instant }
   }, [runtimeErrors])
 
+  const insightCount = instantErrors.length + (hasVulnerabilityInsight ? 1 : 0)
+
   const [activeTab, setActiveTab] = useState<ErrorTab>(() =>
     normalErrors.length > 0 ? 'errors' : 'instant'
   )
@@ -698,7 +703,7 @@ export function Errors({
       ? normalErrors.length > 0
         ? 'errors'
         : 'instant'
-      : instantErrors.length > 0
+      : insightCount > 0
         ? 'instant'
         : 'errors'
   const activeErrors =
@@ -709,7 +714,7 @@ export function Errors({
   )
   const instantActiveIdx = Math.max(
     0,
-    Math.min(activeIndices.instant, Math.max(0, instantErrors.length - 1))
+    Math.min(activeIndices.instant, Math.max(0, insightCount - 1))
   )
   const activeIdxForTab =
     effectiveActiveTab === 'instant' ? instantActiveIdx : errorActiveIdx
@@ -744,29 +749,11 @@ export function Errors({
     [activeError, errorType, props.versionInfo]
   )
 
-  if (isLoading) {
-    // TODO: better loading state
-    return (
-      <Overlay>
-        <OverlayBackdrop />
-      </Overlay>
-    )
-  }
-
-  if (!activeError) {
-    return null
-  }
-
-  const error = activeError.error
-  const isServerError = ['server', 'edge-server'].includes(
-    getErrorSource(error) || ''
-  )
-
   // Show the tab bar only when at least one Insight is present. When the only
   // bucket with content is Issues, the red pill already conveys the count and a
   // single-tab bar would be redundant. When Insights exist (alone or alongside
   // Issues), the bar is shown so the user can switch between buckets.
-  const showTabBar = instantErrors.length > 0
+  const showTabBar = insightCount > 0
   const renderTabBar = showTabBar
     ? ({
         previousButton,
@@ -781,7 +768,7 @@ export function Errors({
             })
           }}
           errorCount={normalErrors.length}
-          instantCount={instantErrors.length}
+          instantCount={insightCount}
           errorActiveIdx={errorActiveIdx}
           instantActiveIdx={instantActiveIdx}
           previousButton={previousButton}
@@ -798,8 +785,8 @@ export function Errors({
     : activeIdx > 0
   const canGoNext = showTabBar
     ? effectiveActiveTab === 'errors'
-      ? errorActiveIdx < normalErrors.length - 1 || instantErrors.length > 0
-      : instantActiveIdx < instantErrors.length - 1
+      ? errorActiveIdx < normalErrors.length - 1 || insightCount > 0
+      : instantActiveIdx < insightCount - 1
     : activeIdx < activeErrors.length - 1
 
   const handlePrevious = showTabBar
@@ -837,7 +824,7 @@ export function Errors({
               return
             }
 
-            if (instantErrors.length > 0) {
+            if (insightCount > 0) {
               setActiveTab('instant')
               setActiveIndices((previous) => ({
                 ...previous,
@@ -847,12 +834,51 @@ export function Errors({
             return
           }
 
-          if (instantActiveIdx < instantErrors.length - 1) {
+          if (instantActiveIdx < insightCount - 1) {
             setActiveIndex(instantActiveIdx + 1)
           }
         })
       }
     : undefined
+
+  if (
+    hasVulnerabilityInsight &&
+    effectiveActiveTab === 'instant' &&
+    instantActiveIdx === instantErrors.length
+  ) {
+    const hasServerError = runtimeErrors.some(({ error }) =>
+      ['server', 'edge-server'].includes(getErrorSource(error) || '')
+    )
+    return (
+      <VulnerabilityInsight
+        {...props}
+        renderTabBar={renderTabBar}
+        canGoPrevious={canGoPrevious}
+        canGoNext={canGoNext}
+        onPrevious={handlePrevious}
+        onNext={handleNext}
+        onClose={hasServerError ? undefined : onClose}
+      />
+    )
+  }
+
+  if (isLoading) {
+    // TODO: better loading state
+    return (
+      <Overlay>
+        <OverlayBackdrop />
+      </Overlay>
+    )
+  }
+
+  if (!activeError) {
+    return null
+  }
+
+  const error = activeError.error
+  const isServerError = ['server', 'edge-server'].includes(
+    getErrorSource(error) || ''
+  )
 
   let errorMessage: React.ReactNode
   let maybeNotes: React.ReactNode = null
@@ -911,16 +937,14 @@ export function Errors({
         case 'navigation':
           errorMessage = (
             <>
-              Next.js encountered <code>unstable_navigation()</code> outside of
-              Suspense.
+              Next.js encountered <code>navigation()</code> outside of Suspense.
             </>
           )
           break
         case 'prefetch':
           errorMessage = (
             <>
-              Next.js encountered <code>unstable_prefetch()</code> outside of
-              Suspense.
+              Next.js encountered <code>prefetch()</code> outside of Suspense.
             </>
           )
           break
@@ -1040,7 +1064,7 @@ export function Errors({
         case 'navigation':
           errorMessage = (
             <>
-              Next.js encountered <code>unstable_navigation()</code> in{' '}
+              Next.js encountered <code>navigation()</code> in{' '}
               <code>generateMetadata()</code>.
             </>
           )
@@ -1048,7 +1072,7 @@ export function Errors({
         case 'prefetch':
           errorMessage = (
             <>
-              Next.js encountered <code>unstable_prefetch()</code> in{' '}
+              Next.js encountered <code>prefetch()</code> in{' '}
               <code>generateMetadata()</code>.
             </>
           )
@@ -1124,7 +1148,7 @@ export function Errors({
         case 'navigation':
           errorMessage = (
             <>
-              Next.js encountered <code>unstable_navigation()</code> in{' '}
+              Next.js encountered <code>navigation()</code> in{' '}
               <code>generateViewport()</code>.
             </>
           )
@@ -1132,7 +1156,7 @@ export function Errors({
         case 'prefetch':
           errorMessage = (
             <>
-              Next.js encountered <code>unstable_prefetch()</code> in{' '}
+              Next.js encountered <code>prefetch()</code> in{' '}
               <code>generateViewport()</code>.
             </>
           )

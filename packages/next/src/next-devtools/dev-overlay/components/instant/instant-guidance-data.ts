@@ -327,8 +327,7 @@ const metadataRuntimeCards: FixCard[] = [
 function getMetadataCacheStageCards(
   variant: 'prefetch' | 'navigation'
 ): FixCard[] {
-  const api =
-    variant === 'prefetch' ? 'unstable_prefetch' : 'unstable_navigation'
+  const api = variant === 'prefetch' ? 'prefetch' : 'navigation'
 
   return [
     {
@@ -414,8 +413,7 @@ const viewportRuntimeCards: FixCard[] = [
 function getViewportCacheStageCards(
   variant: 'prefetch' | 'navigation'
 ): FixCard[] {
-  const api =
-    variant === 'prefetch' ? 'unstable_prefetch' : 'unstable_navigation'
+  const api = variant === 'prefetch' ? 'prefetch' : 'navigation'
 
   return [
     {

@@ -87,7 +87,7 @@ describe('instant-nav-panel', () => {
         }, selector)
       const expectedResponse =
         href === '/target-page/my-post?search=foo'
-          ? { includes: 'dynamic-skeleton' }
+          ? { includes: 'dynamic-skeleton', kind: 'static' as const }
           : undefined
 
       if ((await browser.locator(selector).count()) > 0) {

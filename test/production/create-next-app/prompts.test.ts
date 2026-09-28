@@ -204,7 +204,6 @@ describe('create-next-app prompts', () => {
               'next.config.ts',
               'tsconfig.json',
               'AGENTS.md',
-              'CLAUDE.md',
             ],
           })
           resolve()
@@ -222,6 +221,9 @@ describe('create-next-app prompts', () => {
           ],
         }
       `)
+      expect(
+        readFileSync(join(cwd, projectName, 'next.config.ts'), 'utf8')
+      ).not.toContain('agentFeedback')
     })
   })
 
@@ -237,8 +239,16 @@ describe('create-next-app prompts', () => {
       )
 
       await new Promise<void>((resolve) => {
+        let output = ''
+        childProcess.stdout.on('data', (data) => {
+          output += data
+          process.stdout.write(data)
+        })
+
         childProcess.on('exit', async (exitCode) => {
           expect(exitCode).toBe(0)
+          expect(output).toContain('Agent feedback')
+          expect(output).not.toMatch(/agents prepare anonymized feedback/)
           projectFilesShouldExist({
             cwd,
             projectName,
@@ -247,8 +257,7 @@ describe('create-next-app prompts', () => {
               'package.json',
               'next.config.ts', // tailwind
               'tsconfig.json', // typescript
-              'AGENTS.md', // agent files
-              'CLAUDE.md',
+              'AGENTS.md', // agent instructions
             ],
           })
           resolve()
@@ -261,6 +270,9 @@ describe('create-next-app prompts', () => {
       const pkg = require(join(cwd, projectName, 'package.json'))
       expect(pkg.name).toBe(projectName)
       expectTurbopackTailwindSetup(cwd, projectName)
+      expect(
+        readFileSync(join(cwd, projectName, 'next.config.ts'), 'utf8')
+      ).toContain('\n  experimental: {\n    agentFeedback: true,\n  },\n')
     })
   })
 
@@ -305,6 +317,12 @@ describe('create-next-app prompts', () => {
         await retry(async () => {
           expect(output).toMatch(/No, reuse previous settings/)
         })
+
+        await retry(async () => {
+          expect(output).toMatch(/agents prepare anonymized feedback/)
+        })
+        // Accept the default "Yes" for agent feedback.
+        childProcess.stdin.write('\n')
 
         childProcess.on('exit', async (exitCode) => {
           expect(exitCode).toBe(0)

@@ -75,9 +75,9 @@ describe('navigation stage Insight messages', () => {
       error: () => createNavigationMetadataError(ROUTE),
       detail:
         "Metadata can already stream without blocking the route's UI, so delaying it until navigation may be unintentional.",
-      fix: '[remove] Remove `unstable_navigation()` from `generateMetadata()`',
+      fix: '[remove] Remove `navigation()` from `generateMetadata()`',
       secondFix:
-        '[mark] Render a marker component that calls `await unstable_navigation()` inside `<Suspense>` on the page',
+        '[mark] Render a marker component that calls `await navigation()` inside `<Suspense>` on the page',
       docs: 'instant-navigation-stage-metadata',
       explanation:
         'Metadata can already stream, so delaying it may be unintentional.',
@@ -86,9 +86,9 @@ describe('navigation stage Insight messages', () => {
       error: () => createPrefetchMetadataError(ROUTE),
       detail:
         "Metadata can already stream without blocking the route's UI, so delaying it until a per-link prefetch or navigation may be unintentional.",
-      fix: '[remove] Remove `unstable_prefetch()` from `generateMetadata()`',
+      fix: '[remove] Remove `prefetch()` from `generateMetadata()`',
       secondFix:
-        '[mark] Render a marker component that calls `await unstable_prefetch()` inside `<Suspense>` on the page',
+        '[mark] Render a marker component that calls `await prefetch()` inside `<Suspense>` on the page',
       docs: 'instant-navigation-stage-metadata',
       explanation:
         'Metadata can already stream, so delaying it may be unintentional.',
@@ -97,7 +97,7 @@ describe('navigation stage Insight messages', () => {
       error: () => createNavigationViewportError(ROUTE),
       detail:
         'This prevents Next.js from creating the App Shell, leading to a slower user experience.',
-      fix: '[remove] Remove `unstable_navigation()` from `generateViewport()`',
+      fix: '[remove] Remove `navigation()` from `generateViewport()`',
       secondFix:
         '[ignore] Set `export const instant = false` to disable validation for this segment',
       docs: 'instant-navigation-stage-viewport',
@@ -108,7 +108,7 @@ describe('navigation stage Insight messages', () => {
       error: () => createPrefetchViewportError(ROUTE),
       detail:
         'This prevents Next.js from creating the App Shell, leading to a slower user experience.',
-      fix: '[remove] Remove `unstable_prefetch()` from `generateViewport()`',
+      fix: '[remove] Remove `prefetch()` from `generateViewport()`',
       secondFix:
         '[ignore] Set `export const instant = false` to disable validation for this segment',
       docs: 'instant-navigation-stage-viewport',
@@ -611,11 +611,11 @@ describe('card sets for all error families', () => {
       group: 'mark',
     })
     expect(cards[0].snippets).toContainEqual({
-      text: `-  await unstable_${variant}()`,
+      text: `-  await ${variant}()`,
       highlight: true,
     })
     expect(cards[1].snippets).toContainEqual({
-      text: `await unstable_${variant}()`,
+      text: `await ${variant}()`,
       highlight: true,
     })
   })
@@ -647,7 +647,7 @@ describe('card sets for all error families', () => {
       'disable-validation-on-this-route',
     ])
     expect(cards[0].snippets).toContainEqual({
-      text: `-  await unstable_${variant}()`,
+      text: `-  await ${variant}()`,
       highlight: true,
     })
   })
@@ -881,7 +881,7 @@ describe('isInstantNavigationError', () => {
     expect(isInstantNavigationError(error)).toBe(true)
   })
 
-  it('returns true for unstable_prefetch and unstable_navigation in metadata and viewport', () => {
+  it('returns true for prefetch and navigation in metadata and viewport', () => {
     expect(isInstantNavigationError(createNavigationMetadataError(ROUTE))).toBe(
       true
     )

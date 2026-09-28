@@ -3,18 +3,13 @@ declare const __turbopack_external_require__: {
 } & ((id: string, thunk: () => any, esm?: boolean) => any)
 
 import type { Channel as Ipc } from '../types'
-import { dirname, resolve as pathResolve, relative } from 'path'
+import { dirname, resolve as pathResolve } from 'path'
 import {
   StackFrame,
   parse as parseStackTrace,
 } from '../compiled/stacktrace-parser'
 import { structuredError, type StructuredError } from '../error'
-import {
-  fromPath,
-  getReadEnvVariables,
-  toPath,
-  type TransformIpc,
-} from './transforms'
+import { getReadEnvVariables, type TransformIpc } from './transforms'
 import {
   evaluateBundle,
   type ImportModuleResult,
@@ -173,6 +168,7 @@ const transform = (
     const loadersWithOptions = loaders.map((loader) =>
       typeof loader === 'string' ? { loader, options: {} } : loader
     )
+    const buildDependencies = new Set<string>()
 
     const logs: Array<{
       time: number
@@ -202,12 +198,15 @@ const transform = (
               ? entry.options
               : {}
           },
+          addBuildDependency(dependency: string) {
+            buildDependencies.add(pathResolve(contextDir, dependency))
+          },
           fs: {
             readFile(p: string, optionsOrCb: any, maybeCb: any) {
               ipc
                 .sendRequest({
                   type: 'trackFileRead',
-                  file: relative(contextDir, pathResolve(p)),
+                  file: pathResolve(p),
                 })
                 .then(
                   () => {
@@ -344,13 +343,13 @@ const transform = (
                 .sendRequest({
                   type: 'resolve',
                   options: rustOptions,
-                  lookupPath: toPath(lookupPath),
+                  lookupPath,
                   request,
                 })
                 .then((unknownResult) => {
                   let result = unknownResult as { path: string }
                   if (result && typeof result.path === 'string') {
-                    return fromPath(result.path)
+                    return result.path
                   } else {
                     throw Error(
                       'Expected { path: string } from resolve request'
@@ -405,7 +404,7 @@ const transform = (
 
               const result = (await ipc.sendRequest({
                 type: 'importModule',
-                lookupPath: toPath(resourceDir),
+                lookupPath: resourceDir,
                 request: actualRequest,
               })) as ImportModuleResult
 
@@ -554,11 +553,12 @@ const transform = (
         ipc.sendInfo({
           type: 'dependencies',
           envVariables: getReadEnvVariables(),
-          filePaths: result.fileDependencies.map(toPath),
-          directories: result.contextDependencies.map((dep) => [
-            toPath(dep),
-            '**',
-          ]),
+          filePaths: [
+            ...result.fileDependencies,
+            ...result.missingDependencies,
+          ],
+          directories: result.contextDependencies.map((dep) => [dep, '**']),
+          buildFilePaths: [...buildDependencies].sort(),
         })
         if (err) {
           // Resolve loader paths to include in the error message using
