@@ -9,11 +9,12 @@ import {
   getParsedNodeOptions,
 } from '../../server/lib/utils'
 import { shouldPromptForUpgrade, runUpgrade, type NudgeKind } from './nudge'
+import { coordinateUpgradeOutput } from './upgrade-output'
 
 /**
  * Keep a build stoppable while its own config load decides whether to prompt.
- * The child inherits the real terminal; no config preflight or output capture
- * runs in this parent. Dev already has this parent/worker split.
+ * The child loads config once and sends its reminder to this parent. Capture
+ * build output while the parent owns the menu, then replay it before exiting.
  */
 export async function runBuildWithUpgradePrompt(
   directory: string
@@ -36,7 +37,7 @@ export async function runBuildWithUpgradePrompt(
   }
   const debugOptions = debugType ? formatNodeOptions(nodeOptions) : null
   const child = fork(process.argv[1], process.argv.slice(2), {
-    stdio: 'inherit',
+    stdio: ['inherit', 'pipe', 'pipe', 'ipc'],
     ...(debugOptions ? { execArgv: debugOptions.execArgv } : undefined),
     env: {
       ...process.env,
@@ -49,31 +50,28 @@ export async function runBuildWithUpgradePrompt(
   let upgrade: Promise<number | string> | undefined
   let interrupted = false
 
-  child.on('message', (message: unknown) => {
-    if (typeof message !== 'object' || message === null) {
-      return
-    }
-    const action = Reflect.get(message, 'upgradePromptAction')
-    if (action === 'interrupt') {
-      interrupted = true
-      child.kill('SIGINT')
-      return
-    }
-    const policy = Reflect.get(message, 'policy')
-    if (
-      action === 'update' &&
-      !upgrade &&
-      (policy === 'security' || policy === 'latest' || policy === 'future')
-    ) {
-      child.kill('SIGTERM')
-      // Do not wait for build shutdown before the upgrade starts.
-      stopForwardingSignals()
-      upgrade = runUpgrade(dir, policy as NudgeKind)
-    }
-  })
+  const output = coordinateUpgradeOutput(
+    child,
+    dir,
+    (action, policy: NudgeKind) => {
+      if (action === 'interrupt') {
+        interrupted = true
+        child.kill('SIGINT')
+        return
+      }
+      if (action === 'update' && !upgrade) {
+        child.kill('SIGTERM')
+        // Do not wait for build shutdown before the upgrade starts.
+        stopForwardingSignals()
+        upgrade = runUpgrade(dir, policy)
+      }
+    },
+    true
+  )
 
   const onSignal = (signal: NodeJS.Signals) => {
     interrupted = true
+    output.cancel()
     child.kill(signal)
   }
   const onInterrupt = () => onSignal('SIGINT')
@@ -97,18 +95,20 @@ export async function runBuildWithUpgradePrompt(
       child.once('error', reject)
       child.once('exit', (code, signal) => resolve({ code, signal }))
     })
+    await output.waitForPrompt()
     if (upgrade) {
       process.exitCode = await upgrade
     } else if (interrupted) {
       process.exitCode = exit.signal
         ? 128 + constants.signals[exit.signal]
-        : (exit.code ?? 130)
+        : 130
     } else {
       process.exitCode = exit.signal
         ? 128 + constants.signals[exit.signal]
         : (exit.code ?? 1)
     }
   } finally {
+    output.cancel()
     stopForwardingSignals()
   }
   return true

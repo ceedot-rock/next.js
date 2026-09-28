@@ -1147,37 +1147,26 @@ export default async function build(
         )
       loadedConfig = config
 
-      // Reuse the config already loaded for this build. The build child owns
-      // the menu while compilation continues; its parent handles Upgrade now.
+      // Assess with this build's loaded config while compilation continues.
+      // The CLI parent owns the human menu and child output.
       if (
         config.experimental.agenticAutoUpgrade === 'security' ||
         config.experimental.agenticAutoUpgrade === 'latest' ||
         config.experimental.agenticAutoUpgrade === 'future' ||
         process.env.__NEXT_AGENTIC_AUTO_UPGRADE
       ) {
-        const { nudgeUpgrade, getUpgradeContext } =
+        const { nudgeUpgrade, getUpgradeContext, sendUpgradeReminder } =
           require('../lib/upgrade/nudge') as typeof import('../lib/upgrade/nudge')
         const upgradeContext = getUpgradeContext(config)
         pendingUpgradeNudge = nudgeUpgrade(
           dir,
           upgradeContext,
           'build',
+          null,
           process.send && process.env.NEXT_PRIVATE_UPGRADE_BUILD_CHILD === '1'
-            ? new AbortController().signal
-            : null
-        ).then((action) => {
-          if (
-            action === 'update' &&
-            upgradeContext.experimental.agenticAutoUpgrade
-          ) {
-            process.send?.({
-              upgradePromptAction: 'update',
-              policy: upgradeContext.experimental.agenticAutoUpgrade,
-            })
-          } else if (action === 'interrupt') {
-            process.send?.({ upgradePromptAction: 'interrupt' })
-          }
-        })
+            ? sendUpgradeReminder
+            : undefined
+        ).then(() => {})
         void pendingUpgradeNudge.catch(() => {})
       }
 

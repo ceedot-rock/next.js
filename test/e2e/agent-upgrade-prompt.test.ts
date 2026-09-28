@@ -116,4 +116,49 @@ describe('agent upgrade prompt', () => {
       await dev.stop()
     }
   })
+
+  it('completes build without a menu under the security policy', async () => {
+    const nextBin = process.env.NEXT_SKIP_ISOLATE
+      ? join(process.cwd(), 'packages/next/dist/bin/next')
+      : resolveFrom(next.testDir, 'next/dist/bin/next')
+    const pty = require(resolveFrom(next.testDir, 'node-pty'))
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      __NEXT_AGENTIC_AUTO_UPGRADE: 'security',
+    }
+    delete env.AI_AGENT
+    delete env.CODEX_SANDBOX
+    delete env.CODEX_CI
+    delete env.CODEX_THREAD_ID
+
+    const terminal = pty.spawn(process.execPath, [nextBin, 'build'], {
+      cwd: next.testDir,
+      env,
+      name: 'xterm-256color',
+      cols: 100,
+      rows: 30,
+    })
+    let output = ''
+    let exited = false
+    let exitCode: number | undefined
+    terminal.onData((data: string) => {
+      output += data
+    })
+    terminal.onExit(({ exitCode: code }) => {
+      exited = true
+      exitCode = code
+    })
+
+    try {
+      await retry(async () => {
+        expect(exited).toBe(true)
+      }, 120_000)
+      expect(exitCode).toBe(0)
+      expect(output).not.toContain('Upgrade now')
+    } finally {
+      if (!exited) {
+        terminal.kill()
+      }
+    }
+  })
 })
