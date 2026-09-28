@@ -213,6 +213,7 @@ import {
   ClientComponentLoadTracker,
   wrapClientComponentLoader,
 } from '../client-component-renderer-logger'
+import { trackStreamCompletion } from '../stream-utils/track-stream-completion'
 import { isNodeNextRequest, isNodeNextResponse } from '../base-http/helpers'
 import { waitForResponseToFinish } from './wait-for-response'
 import {
@@ -945,7 +946,8 @@ async function generateDynamicFlightRenderResult(
     preloadCallbacks?: PreloadCallbacks
     temporaryReferences?: WeakMap<any, string>
     waitUntil?: Promise<unknown>
-  }
+  },
+  onRenderComplete?: (completed: boolean) => void
 ): Promise<RenderResult> {
   const { htmlRequestId, renderOpts, requestId, workStore } = ctx
 
@@ -1015,8 +1017,11 @@ async function generateDynamicFlightRenderResult(
       }
     )
 
+    const outputStream = onRenderComplete
+      ? trackStreamCompletion(flightStream, onRenderComplete)
+      : flightStream
     return new FlightRenderResult(
-      flightStream,
+      outputStream,
       { fetchMetrics: workStore.fetchMetrics },
       options?.waitUntil
     )
@@ -1051,8 +1056,11 @@ async function generateDynamicFlightRenderResult(
       }
     )
 
+    const outputStream = onRenderComplete
+      ? trackStreamCompletion(flightStream, onRenderComplete)
+      : flightStream
     return new FlightRenderResult(
-      flightStream,
+      outputStream,
       { fetchMetrics: workStore.fetchMetrics },
       options?.waitUntil
     )
@@ -3129,30 +3137,24 @@ async function renderAppPage(
       }
     : undefined
 
-  function finishDevIsrStatus(result: RenderResult): RenderResult {
-    if (!setDevIsrStatus || process.env.NEXT_RUNTIME === 'edge') return result
-
-    const publish = () => {
-      if (
-        !result.isNull &&
-        !hadSSRRenderError &&
-        workStore.reactServerErrorsByDigest.size === 0 &&
-        (result.metadata.statusCode ?? 200) < 500
-      ) {
-        setDevIsrStatus(
-          url.pathname,
-          !requestStore.usedDynamic && !workStore.forceDynamic
-        )
-      }
-    }
-
-    // A clean output completion publishes the status. Errors and consumer
-    // cancellation leave it pending instead of guessing Static.
-    result.onOutputSettled((completed) => {
-      if (completed) publish()
-    })
-    return result
-  }
+  const onDevRenderComplete =
+    process.env.__NEXT_DEV_SERVER &&
+    process.env.NEXT_RUNTIME !== 'edge' &&
+    setDevIsrStatus
+      ? (completed: boolean) => {
+          if (
+            completed &&
+            !hadSSRRenderError &&
+            workStore.reactServerErrorsByDigest.size === 0 &&
+            (metadata.statusCode ?? 200) < 500
+          ) {
+            setDevIsrStatus(
+              url.pathname,
+              !requestStore.usedDynamic && !workStore.forceDynamic
+            )
+          }
+        }
+      : undefined
 
   // MARK: RSC request
   if (isRSCRequest) {
@@ -3187,13 +3189,12 @@ async function renderAppPage(
         )
       } else {
         // MARK: RSC dynamic
-        return finishDevIsrStatus(
-          await generateDynamicFlightRenderResult(
-            req,
-            ctx,
-            requestStore,
-            undefined
-          )
+        return generateDynamicFlightRenderResult(
+          req,
+          ctx,
+          requestStore,
+          undefined,
+          onDevRenderComplete
         )
       }
     }
@@ -3331,7 +3332,10 @@ async function renderAppPage(
     }
 
     // Create the new render result for the response.
-    return finishDevIsrStatus(new RenderResult(stream, options))
+    const outputStream = onDevRenderComplete
+      ? trackStreamCompletion(stream, onDevRenderComplete)
+      : stream
+    return new RenderResult(outputStream, options)
   } catch (renderError) {
     // Returning a stream may precede SSR readiness, which finishes success.
     // Only failures finish here; a finally would seal successful renders early.
