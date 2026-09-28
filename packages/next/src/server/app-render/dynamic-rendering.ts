@@ -634,19 +634,6 @@ function trackOutletSuspenseAboveBody(
   }
 }
 
-function maybeOmitStaticRouteInsight(
-  error: Error,
-  showStaticRouteInsight: boolean
-): Error {
-  if (process.env.__NEXT_DEV_SERVER && !showStaticRouteInsight) {
-    error.message = error.message.replace(
-      /\n\nLearn more: https:\/\/nextjs\.org\/docs\/messages\/ensure-static-(?:route|metadata|viewport)$/,
-      ''
-    )
-  }
-  return error
-}
-
 export function trackDynamicAccessInStaticRoute(
   dynamicReason: unknown,
   workStore: WorkStore,
@@ -654,8 +641,7 @@ export function trackDynamicAccessInStaticRoute(
   dynamicValidation: DynamicValidationState,
   clientDynamic: DynamicTrackingState,
   isServerPartial: boolean,
-  kind: StaticValidationHoleKind,
-  showStaticRouteInsight = true
+  kind: StaticValidationHoleKind
 ) {
   const syncDynamicError = getPendingClientSyncDynamicError(clientDynamic)
 
@@ -666,10 +652,7 @@ export function trackDynamicAccessInStaticRoute(
   if (hasMetadataRegex.test(componentStack)) {
     dynamicValidation.dynamicErrors.push(
       addErrorContext(
-        maybeOmitStaticRouteInsight(
-          createMetadataErrorInStaticRoute(kind, workStore.route),
-          showStaticRouteInsight
-        ),
+        createMetadataErrorInStaticRoute(kind, workStore.route),
         componentStack,
         null
       )
@@ -679,10 +662,7 @@ export function trackDynamicAccessInStaticRoute(
   if (hasViewportRegex.test(componentStack)) {
     dynamicValidation.dynamicErrors.push(
       addErrorContext(
-        maybeOmitStaticRouteInsight(
-          createViewportErrorInStaticRoute(kind, workStore.route),
-          showStaticRouteInsight
-        ),
+        createViewportErrorInStaticRoute(kind, workStore.route),
         componentStack,
         null
       )
@@ -725,10 +705,7 @@ export function trackDynamicAccessInStaticRoute(
     // (NOTE: this may misreport valid client dynamic holes as server holes)
     dynamicValidation.dynamicErrors.push(
       addErrorContext(
-        maybeOmitStaticRouteInsight(
-          createBodyErrorInStaticRoute(kind, workStore.route),
-          showStaticRouteInsight
-        ),
+        createBodyErrorInStaticRoute(kind, workStore.route),
         componentStack,
         null
       )
@@ -749,16 +726,13 @@ export function trackDynamicAccessInStaticRoute(
   }
 
   const error = addErrorContext(
-    maybeOmitStaticRouteInsight(
-      isServerPartial
-        ? // This hole may be caused by server data.
-          // (NOTE: this may misreport client dynamic holes as server holes)
-          createBodyErrorInStaticRoute(kind, workStore.route)
-        : // TODO(ensure-static): this could be something client-specific because we know
-          // that server data is complete
-          createBodyError(kind, workStore.route),
-      showStaticRouteInsight
-    ),
+    isServerPartial
+      ? // This hole may be caused by server data.
+        // (NOTE: this may misreport client dynamic holes as server holes)
+        createBodyErrorInStaticRoute(kind, workStore.route)
+      : // TODO(ensure-static): this could be something client-specific because we know
+        // that server data is complete
+        createBodyError(kind, workStore.route),
     componentStack,
     null
   )
