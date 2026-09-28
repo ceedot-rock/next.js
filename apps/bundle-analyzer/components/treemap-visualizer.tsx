@@ -767,10 +767,10 @@ export function TreemapVisualizer({
 
     while (currentIndex !== undefined && currentIndex !== null) {
       chain.unshift(currentIndex)
-      const parentIndex =
-        getParentSourceIndex?.(currentIndex) ??
-        analyzeData.source(currentIndex)?.parent_source_index ??
-        null
+      // A null parent from the diff graph means root, not a missing override.
+      const parentIndex = getParentSourceIndex
+        ? getParentSourceIndex(currentIndex)
+        : (analyzeData.source(currentIndex)?.parent_source_index ?? null)
       if (parentIndex === null) break
       currentIndex = parentIndex
     }
@@ -785,10 +785,10 @@ export function TreemapVisualizer({
 
     while (currentIndex !== undefined && currentIndex !== null) {
       chain.unshift(currentIndex)
-      const parentIndex =
-        getParentSourceIndex?.(currentIndex) ??
-        analyzeData.source(currentIndex)?.parent_source_index ??
-        null
+      // A null parent from the diff graph means root, not a missing override.
+      const parentIndex = getParentSourceIndex
+        ? getParentSourceIndex(currentIndex)
+        : (analyzeData.source(currentIndex)?.parent_source_index ?? null)
       if (parentIndex === null) break
       currentIndex = parentIndex
     }
@@ -810,10 +810,10 @@ export function TreemapVisualizer({
 
     while (currentIndex !== undefined && currentIndex !== null) {
       chain.unshift(currentIndex)
-      const parentIndex =
-        getParentSourceIndex?.(currentIndex) ??
-        analyzeData.source(currentIndex)?.parent_source_index ??
-        null
+      // A null parent from the diff graph means root, not a missing override.
+      const parentIndex = getParentSourceIndex
+        ? getParentSourceIndex(currentIndex)
+        : (analyzeData.source(currentIndex)?.parent_source_index ?? null)
       if (parentIndex === null) break
       currentIndex = parentIndex
     }
