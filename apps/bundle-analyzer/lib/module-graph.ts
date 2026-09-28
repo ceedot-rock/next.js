@@ -226,6 +226,7 @@ export function computeSourceLoadScopes(
 
     const hasInitial = (scope & ModuleLoadScope.Initial) !== 0
     const hasAsync = (scope & ModuleLoadScope.Async) !== 0
+    const hasTraced = (scope & ModuleLoadScope.Traced) !== 0
     let loadScope: SourceLoadScope
     if (hasInitial && hasAsync) {
       loadScope = 'mixed'
@@ -233,7 +234,7 @@ export function computeSourceLoadScopes(
       loadScope = 'async'
     } else if (hasInitial) {
       loadScope = 'initial'
-    } else if ((scope & ModuleLoadScope.Traced) !== 0) {
+    } else if (hasTraced) {
       loadScope = 'traced'
     } else {
       loadScope = 'unknown'
