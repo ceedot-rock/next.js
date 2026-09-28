@@ -67,6 +67,9 @@ type PortSource = 'cli' | 'default' | 'env'
 
 let dir: string
 let child: undefined | ChildProcess
+let upgradeOutput:
+  | { cancel(): void; waitForPrompt(): Promise<void> }
+  | undefined
 // distDir is received from the child process via IPC, used for telemetry and trace.
 let distDir: string | undefined
 let isTurbopack: boolean
@@ -137,6 +140,11 @@ const handleSessionStop = async (
     await once(child, 'exit').catch(() => {})
     if (exitTimeout) clearTimeout(exitTimeout)
   }
+
+  if (signal != null) {
+    upgradeOutput?.cancel()
+  }
+  await upgradeOutput?.waitForPrompt()
 
   sessionSpan.stop()
 
@@ -239,7 +247,13 @@ const nextDev = async (
 
   dir = getProjectDir(process.env.NEXT_PRIVATE_DEV_DIR || directory)
 
-  const { runUpgrade } = await import('../lib/upgrade/nudge.js')
+  const { runUpgrade, shouldPromptForUpgrade } = await import(
+    '../lib/upgrade/nudge.js'
+  )
+  const useUpgradeOutput = await shouldPromptForUpgrade()
+  const { coordinateUpgradeOutput } = await import(
+    '../lib/upgrade/upgrade-output.js'
+  )
 
   // Check if pages dir exists and warn if not
   if (!(await fileExists(dir, FileType.Directory))) {
@@ -423,7 +437,9 @@ const nextDev = async (
         formatNodeOptions(nodeOptions)
 
       child = fork(startServerPath, {
-        stdio: 'inherit',
+        stdio: useUpgradeOutput
+          ? ['inherit', 'pipe', 'pipe', 'ipc']
+          : 'inherit',
         execArgv,
         env: {
           ...defaultEnv,
@@ -431,6 +447,9 @@ const nextDev = async (
           __NEXT_DEV_SERVER: '1',
           NEXT_PRIVATE_START_TIME: process.env.NEXT_PRIVATE_START_TIME,
           NEXT_PRIVATE_WORKER: '1',
+          NEXT_PRIVATE_UPGRADE_PROMPT_PARENT: useUpgradeOutput
+            ? '1'
+            : undefined,
           NEXT_PRIVATE_UPGRADE_SKIPPED_POLICY: skippedUpgradePolicy,
           NEXT_PRIVATE_TRACE_ID: traceId,
           NEXT_PRIVATE_ENABLED_FEATURES: JSON.stringify(enabledFeatures),
@@ -489,20 +508,22 @@ const nextDev = async (
         })()
       }
 
+      upgradeOutput = useUpgradeOutput
+        ? coordinateUpgradeOutput(child, dir, (action, policy) => {
+            if (action === 'update') {
+              startUpgrade(policy)
+            } else if (action === 'skip' || action === 'dismiss') {
+              skippedUpgradePolicy = policy
+            } else if (action === 'interrupt') {
+              void handleSessionStop('SIGINT', true, 130)
+            }
+          })
+        : undefined
+      const childUpgradeOutput = upgradeOutput
+
       child.on('message', (msg: any) => {
         if (msg && typeof msg === 'object') {
-          if (msg.upgradePromptAction === 'update') {
-            startUpgrade(msg.policy)
-          } else if (
-            msg.upgradePromptAction === 'skip' &&
-            (msg.policy === 'security' ||
-              msg.policy === 'latest' ||
-              msg.policy === 'future')
-          ) {
-            skippedUpgradePolicy = msg.policy
-          } else if (msg.upgradePromptAction === 'interrupt') {
-            void handleSessionStop('SIGINT', true, 130)
-          } else if (msg.nextWorkerReady) {
+          if (msg.nextWorkerReady) {
             child?.send({ nextWorkerOptions: startServerOptions })
           } else if (msg.nextServerReady && !resolved) {
             if (msg.port) {
@@ -522,6 +543,7 @@ const nextDev = async (
       })
 
       child.on('exit', async (code, signal) => {
+        await childUpgradeOutput?.waitForPrompt()
         if (sessionStopHandled) {
           return
         }

@@ -118,7 +118,7 @@ export type UpgradeContext = Pick<
   experimental: Pick<NextConfigComplete['experimental'], 'agenticAutoUpgrade'>
 }
 
-type UpgradeReminder = {
+export type UpgradeReminder = {
   policy: NudgeKind
   installedVersion: string
 } & (
@@ -370,7 +370,7 @@ async function getUpgradeDismissal(
   return null
 }
 
-async function nudgeUpgradeForHuman(
+export async function nudgeUpgradeForHuman(
   directory: string,
   reminder: UpgradeReminder,
   signal: AbortSignal
@@ -448,11 +448,30 @@ export async function shouldPromptForUpgrade(): Promise<boolean> {
   return canPromptForUpgrade() && !(await getAgentName())
 }
 
+export function sendUpgradeReminder(reminder: UpgradeReminder): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (!process.send) {
+      reject(new Error('The upgrade prompt parent is not available'))
+      return
+    }
+    process.send({ upgradePromptReminder: reminder }, (error: Error | null) => {
+      if (error) {
+        reject(error)
+      } else {
+        resolve()
+      }
+    })
+  })
+}
+
 export async function nudgeUpgrade(
   directory: string,
   config: UpgradeContext,
   command: 'dev' | 'build',
-  signal: AbortSignal | null = null
+  signal: AbortSignal | null = null,
+  onHumanReminder:
+    | ((reminder: UpgradeReminder) => Promise<void>)
+    | undefined = undefined
 ): Promise<UpgradeAction | void> {
   const requested = getRequestedUpgrade()
   const policy = requested ?? config.experimental.agenticAutoUpgrade
@@ -462,14 +481,14 @@ export async function nudgeUpgrade(
   if (requested && isCI) {
     return
   }
-  const agent = await getAgentName()
+  const agent = onHumanReminder ? null : await getAgentName()
   const installedVersion = process.env.__NEXT_VERSION || 'unknown'
   let stopBefore: NudgeKind | null = null
   if (!agent) {
-    if (!signal || signal.aborted) {
+    if ((!signal && !onHumanReminder) || signal?.aborted) {
       return
     }
-    if (!canPromptForUpgrade()) {
+    if (!onHumanReminder && !canPromptForUpgrade()) {
       return
     }
     if (!requested) {
@@ -479,7 +498,7 @@ export async function nudgeUpgrade(
         policy
       )
     }
-    if (signal.aborted) {
+    if (signal?.aborted) {
       return
     }
   }
@@ -498,6 +517,8 @@ export async function nudgeUpgrade(
       { directory, distDir: config.distDir, command },
       reminder
     )
+  } else if (onHumanReminder) {
+    await onHumanReminder(reminder)
   } else if (signal) {
     return nudgeUpgradeForHuman(directory, reminder, signal)
   }

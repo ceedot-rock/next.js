@@ -1,5 +1,13 @@
+import { EventEmitter } from 'events'
 import { PassThrough } from 'stream'
+import type { ChildProcess } from 'child_process'
 import { promptUpgrade } from 'next/dist/lib/upgrade/prompt'
+import { coordinateUpgradeOutput } from 'next/dist/lib/upgrade/upgrade-output'
+import { nudgeUpgradeForHuman } from 'next/dist/lib/upgrade/nudge'
+
+jest.mock('next/dist/lib/upgrade/nudge', () => ({
+  nudgeUpgradeForHuman: jest.fn(),
+}))
 
 describe('upgrade menu', () => {
   const stdin = Object.getOwnPropertyDescriptor(process, 'stdin')!
@@ -253,5 +261,88 @@ describe('upgrade menu', () => {
     expect(input.setRawMode).toHaveBeenLastCalledWith(true)
     expect(input.isPaused()).toBe(false)
     expect(screen.endsWith('\x1b[?1049l\x1b[?25h')).toBe(true)
+  })
+})
+
+describe('upgrade output coordinator', () => {
+  const humanPrompt = jest.mocked(nudgeUpgradeForHuman)
+  let choose: (action: 'skip' | 'update') => void
+  let child: ChildProcess
+  let written: string[]
+
+  beforeEach(() => {
+    child = Object.assign(new EventEmitter(), {
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+    }) as unknown as ChildProcess
+    written = []
+    humanPrompt.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          choose = resolve
+        })
+    )
+    jest.spyOn(process.stdout, 'write').mockImplementation((data) => {
+      written.push(data.toString())
+      return true
+    })
+  })
+
+  afterEach(() => {
+    child.stdout?.destroy()
+    child.stderr?.destroy()
+    jest.restoreAllMocks()
+    humanPrompt.mockReset()
+  })
+
+  function openPrompt(onAction: jest.Mock) {
+    const output = coordinateUpgradeOutput(child, '.', onAction)
+    child.emit('message', {
+      upgradePromptReminder: {
+        kind: 'security',
+        policy: 'security',
+        installedVersion: '16.0.0',
+        targetVersion: '16.0.1',
+        reference: 'test',
+      },
+    })
+    return output
+  }
+
+  it('replays child output after Skip', async () => {
+    const onAction = jest.fn()
+    const output = openPrompt(onAction)
+    child.stdout?.write('during menu')
+    expect(written).toEqual([])
+    choose('skip')
+    await output.waitForPrompt()
+    expect(written).toEqual(['during menu'])
+    expect(onAction).toHaveBeenCalledWith('skip', 'security')
+    output.cancel()
+  })
+
+  it('ends a stalled replay when the parent cancels', async () => {
+    const onAction = jest.fn()
+    const output = openPrompt(onAction)
+    child.stdout?.write('blocked output')
+    jest.spyOn(process.stdout, 'write').mockImplementation((data) => {
+      written.push(data.toString())
+      return false
+    })
+    choose('skip')
+    await Promise.resolve()
+    output.cancel()
+    await output.waitForPrompt()
+    expect(written).toEqual(['blocked output'])
+  })
+
+  it('handles Upgrade without waiting for output replay', async () => {
+    const onAction = jest.fn()
+    const output = openPrompt(onAction)
+    child.stdout?.write('during menu')
+    choose('update')
+    await output.waitForPrompt()
+    expect(onAction).toHaveBeenCalledWith('update', 'security')
+    output.cancel()
   })
 })

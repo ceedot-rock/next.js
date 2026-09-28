@@ -228,7 +228,12 @@ export async function initialize(opts: {
       process.env.__NEXT_AGENTIC_AUTO_UPGRADE ||
       process.env.__NEXT_AGENT_UPGRADE_FORCE_DEVTOOLS_FOR_TESTING === '1'
     ) {
-      const { nudgeUpgrade, getUpgradeContext, assessUpgrade } =
+      const {
+        nudgeUpgrade,
+        getUpgradeContext,
+        assessUpgrade,
+        sendUpgradeReminder,
+      } =
         require('../../lib/upgrade/nudge') as typeof import('../../lib/upgrade/nudge')
       const upgradeContext = getUpgradeContext(developmentConfig)
       const installedVersion = process.env.__NEXT_VERSION || 'unknown'
@@ -253,45 +258,29 @@ export async function initialize(opts: {
           return false
         }
       )
-      // Keep upgrade assessment and the human prompt in the worker without
-      // blocking dev startup. The worker sends its choice to the CLI parent.
+      // Assess with the loaded config while dev continues. The CLI parent owns
+      // the human menu and child output, so config only loads in this worker.
       void nudgeUpgrade(
         opts.dir,
         upgradeContext,
         'dev',
-        process.env.NEXT_PRIVATE_UPGRADE_SKIPPED_POLICY === policy
-          ? null
-          : process.send
-            ? new AbortController().signal
-            : null
-      )
-        .then((action) => {
-          if (
-            action === 'update' &&
-            upgradeContext.experimental.agenticAutoUpgrade
-          ) {
-            process.send?.({
-              upgradePromptAction: 'update',
-              policy: upgradeContext.experimental.agenticAutoUpgrade,
-            })
-          } else if (action === 'interrupt') {
-            process.send?.({ upgradePromptAction: 'interrupt' })
-          } else if (action === 'skip' && policy) {
-            process.send?.({ upgradePromptAction: 'skip', policy })
-          }
-        })
-        .catch((error) => {
-          const { printAndExit } =
-            require('./utils') as typeof import('./utils')
-          const exitCode =
-            error && typeof error === 'object'
-              ? Reflect.get(error, 'exitCode')
-              : undefined
-          printAndExit(
-            error instanceof Error ? error.message : String(error),
-            typeof exitCode === 'number' ? exitCode : 1
-          )
-        })
+        null,
+        process.env.NEXT_PRIVATE_UPGRADE_PROMPT_PARENT === '1' &&
+          process.env.NEXT_PRIVATE_UPGRADE_SKIPPED_POLICY !== policy &&
+          process.send
+          ? sendUpgradeReminder
+          : undefined
+      ).catch((error) => {
+        const { printAndExit } = require('./utils') as typeof import('./utils')
+        const exitCode =
+          error && typeof error === 'object'
+            ? Reflect.get(error, 'exitCode')
+            : undefined
+        printAndExit(
+          error instanceof Error ? error.message : String(error),
+          typeof exitCode === 'number' ? exitCode : 1
+        )
+      })
     }
 
     // Resolve the effective serverFastRefresh value.
