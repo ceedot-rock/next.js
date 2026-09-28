@@ -12,7 +12,7 @@ const partialPrefetching = !!process.env.__NEXT_PARTIAL_PREFETCHING
 
 const INSTANT_INSIGHT_PATTERNS = {
   urlData: /Next\.js encountered URL data/,
-  prefetch: /Next\.js encountered prefetch\(\)/,
+  prefetch: /Next\.js encountered `?prefetch\(\)`?/,
   navigation: /Next\.js encountered `?navigation\(\)`?/,
   runtimeData: /Next\.js encountered runtime data/,
   uncachedData: /Next\.js encountered uncached data/,
