@@ -35,10 +35,7 @@ import React from 'react'
 import { DynamicServerError } from '../../client/components/hooks-server-context'
 import { StaticGenBailoutError } from '../../client/components/static-generation-bailout'
 import { getStagedRenderingController } from './work-unit-async-storage.external'
-import {
-  isClientHookDynamicError,
-  isHangingPromiseRejectionError,
-} from '../dynamic-rendering-utils'
+import { isClientHookDynamicError } from '../dynamic-rendering-utils'
 import {
   METADATA_BOUNDARY_NAME,
   VIEWPORT_BOUNDARY_NAME,
@@ -637,15 +634,11 @@ function trackOutletSuspenseAboveBody(
   }
 }
 
-function omitStaticRouteInsightForShortLivedCache(
+function maybeOmitStaticRouteInsight(
   error: Error,
-  dynamicReason: unknown
+  showStaticRouteInsight: boolean
 ): Error {
-  if (
-    process.env.__NEXT_DEV_SERVER &&
-    isHangingPromiseRejectionError(dynamicReason) &&
-    dynamicReason.expression === 'dynamic "use cache"'
-  ) {
+  if (process.env.__NEXT_DEV_SERVER && !showStaticRouteInsight) {
     error.message = error.message.replace(
       /\n\nLearn more: https:\/\/nextjs\.org\/docs\/messages\/ensure-static-(?:route|metadata|viewport)$/,
       ''
@@ -661,7 +654,8 @@ export function trackDynamicAccessInStaticRoute(
   dynamicValidation: DynamicValidationState,
   clientDynamic: DynamicTrackingState,
   isServerPartial: boolean,
-  kind: StaticValidationHoleKind
+  kind: StaticValidationHoleKind,
+  showStaticRouteInsight = true
 ) {
   const syncDynamicError = getPendingClientSyncDynamicError(clientDynamic)
 
@@ -672,9 +666,9 @@ export function trackDynamicAccessInStaticRoute(
   if (hasMetadataRegex.test(componentStack)) {
     dynamicValidation.dynamicErrors.push(
       addErrorContext(
-        omitStaticRouteInsightForShortLivedCache(
+        maybeOmitStaticRouteInsight(
           createMetadataErrorInStaticRoute(kind, workStore.route),
-          dynamicReason
+          showStaticRouteInsight
         ),
         componentStack,
         null
@@ -685,9 +679,9 @@ export function trackDynamicAccessInStaticRoute(
   if (hasViewportRegex.test(componentStack)) {
     dynamicValidation.dynamicErrors.push(
       addErrorContext(
-        omitStaticRouteInsightForShortLivedCache(
+        maybeOmitStaticRouteInsight(
           createViewportErrorInStaticRoute(kind, workStore.route),
-          dynamicReason
+          showStaticRouteInsight
         ),
         componentStack,
         null
@@ -731,9 +725,9 @@ export function trackDynamicAccessInStaticRoute(
     // (NOTE: this may misreport valid client dynamic holes as server holes)
     dynamicValidation.dynamicErrors.push(
       addErrorContext(
-        omitStaticRouteInsightForShortLivedCache(
+        maybeOmitStaticRouteInsight(
           createBodyErrorInStaticRoute(kind, workStore.route),
-          dynamicReason
+          showStaticRouteInsight
         ),
         componentStack,
         null
@@ -755,7 +749,7 @@ export function trackDynamicAccessInStaticRoute(
   }
 
   const error = addErrorContext(
-    omitStaticRouteInsightForShortLivedCache(
+    maybeOmitStaticRouteInsight(
       isServerPartial
         ? // This hole may be caused by server data.
           // (NOTE: this may misreport client dynamic holes as server holes)
@@ -763,7 +757,7 @@ export function trackDynamicAccessInStaticRoute(
         : // TODO(ensure-static): this could be something client-specific because we know
           // that server data is complete
           createBodyError(kind, workStore.route),
-      dynamicReason
+      showStaticRouteInsight
     ),
     componentStack,
     null

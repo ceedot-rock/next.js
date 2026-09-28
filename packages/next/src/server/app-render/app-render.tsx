@@ -4745,6 +4745,7 @@ interface SyncInterruptedStagedDevRender {
  */
 interface StagedDevRenderArtifacts {
   readonly accumulatedChunks: AccumulatedStreamChunks
+  readonly hasShortLivedCache: boolean
   readonly startTime: number
   readonly stageEndTimes: StageEndTimes
 }
@@ -5157,6 +5158,7 @@ async function prepareValidationInputs(
   if (!result.hadCacheMiss && !('syncInterruptReason' in result.outcome)) {
     inputsFromNavigation = {
       accumulatedChunks: result.outcome.accumulatedChunks,
+      hasShortLivedCache: result.outcome.hasShortLivedCache,
       startTime: result.outcome.startTime,
       stageEndTimes: result.outcome.stageEndTimes,
       requestStore,
@@ -5893,6 +5895,7 @@ async function streamStagedRenderInDev({
             startTime,
             stageEndTimes: getStageEndTimes(stageController),
             accumulatedChunks,
+            hasShortLivedCache: requestStore.hasShortLivedCache === true,
           },
     }
   })
@@ -6000,6 +6003,7 @@ async function renderWithWarmCachesForValidationInDev(
 
   return {
     accumulatedChunks,
+    hasShortLivedCache: requestStore.hasShortLivedCache === true,
     startTime,
     stageEndTimes: getStageEndTimes(stageController),
     requestStore,
@@ -6136,6 +6140,7 @@ async function prerenderWithWarmCachesForStaticValidationInDev(
   }
   return {
     accumulatedChunks: collectedChunksByStage,
+    hasShortLivedCache: requestStore.hasShortLivedCache === true,
     startTime,
     stageEndTimes: getStageEndTimes(stageController),
     requestStore,
@@ -6832,6 +6837,7 @@ function toDevValidationInputs(
 ): ResolvedValidationInputs {
   return {
     accumulatedChunks: serialized.accumulatedChunks,
+    hasShortLivedCache: serialized.hasShortLivedCache,
     startTime: serialized.startTime,
     stageEndTimes: serialized.stageEndTimes,
     requestStore,
@@ -7149,6 +7155,7 @@ async function validateStaticShell(
     fallbackRouteParams,
     ensureStaticLevel,
     allowEmptyStaticShell,
+    !inputs.hasShortLivedCache,
     ctx,
     hmrRefreshHash,
     validationAbortSignal
@@ -7174,6 +7181,7 @@ async function validateStaticShell(
     fallbackRouteParams,
     ensureStaticLevel,
     allowEmptyStaticShell,
+    !inputs.hasShortLivedCache,
     ctx,
     hmrRefreshHash,
     validationAbortSignal
@@ -7376,6 +7384,7 @@ async function validateStaticShellAtStage(
   fallbackRouteParams: OpaqueFallbackRouteParams | null,
   ensureStaticLevel: EnsureStaticLevel,
   allowEmptyStaticShell: boolean,
+  showStaticRouteInsight: boolean,
   ctx: ValidationRenderContext,
   hmrRefreshHash: string | undefined,
   validationAbortSignal: AbortSignal
@@ -7483,7 +7492,8 @@ async function validateStaticShellAtStage(
                       dynamicValidation,
                       clientDynamicTracking,
                       stageIsPartial,
-                      dynamicHoleKind
+                      dynamicHoleKind,
+                      showStaticRouteInsight
                     )
                   } else {
                     trackDynamicHoleInStaticShell(
