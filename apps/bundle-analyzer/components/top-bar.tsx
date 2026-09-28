@@ -222,12 +222,8 @@ export function TopBar({
               aria-label="Filter by file type"
             />
 
-            {!isCompareMode && (
-              <>
-                <ControlDivider />
-                <FileSearch value={searchQuery} onChange={setSearchQuery} />
-              </>
-            )}
+            <ControlDivider />
+            <FileSearch value={searchQuery} onChange={setSearchQuery} />
           </>
         )}
       </div>
