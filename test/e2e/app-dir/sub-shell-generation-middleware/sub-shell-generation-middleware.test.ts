@@ -212,9 +212,17 @@ describe('middleware-static-rewrite', () => {
       expect(title2).toBeDefined()
       expect(title2).not.toBe(title1)
 
-      // Let's compare the RSC contents, with the titles removed.
-      const cleaned1 = rsc1.replace(/Grid Page (\d+\.\d+)/, 'Grid Page')
-      const cleaned2 = rsc2.replace(/Grid Page (\d+\.\d+)/, 'Grid Page')
+      // Let's compare the RSC contents, with the titles and the corresponding
+      // shell byte lengths removed. The byte length is encoded before the
+      // title is normalized below, so it can differ when the random title has
+      // a different number of characters.
+      const cleanRsc = (rsc: string) =>
+        rsc
+          .replace(/Grid Page (\d+\.\d+)/, 'Grid Page')
+          .replace(/^b:\d+$/m, 'b:<shell-byte-length>')
+
+      const cleaned1 = cleanRsc(rsc1)
+      const cleaned2 = cleanRsc(rsc2)
       expect(cleaned1).toBe(cleaned2)
     })
   } else {
