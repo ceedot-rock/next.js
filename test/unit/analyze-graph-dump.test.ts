@@ -32,10 +32,14 @@ function file(
   return Buffer.concat([length, json, ...chunks])
 }
 
-function modules(version: number | 'legacy' = 1) {
+function modules(
+  version: number | 'legacy' = 1,
+  extra: Record<string, unknown> = {}
+) {
   return file(
     {
       schema_version: version === 'legacy' ? undefined : version,
+      ...extra,
       modules: [
         { ident: 'app', path: 'app/page.tsx' },
         { ident: 'dep', path: 'dep/index.js' },
@@ -52,7 +56,7 @@ function modules(version: number | 'legacy' = 1) {
   )
 }
 
-function route() {
+function route(extra: Record<string, unknown> = {}, joined = false) {
   return file(
     {
       schema_version: 1,
@@ -70,11 +74,13 @@ function route() {
       ],
       output_files: [{ filename: 'app.js' }],
       source_roots: [0],
+      ...extra,
     },
     {
       source_children: [[1], []],
       source_chunk_parts: [[], [0]],
       output_file_chunk_parts: [[0]],
+      ...(joined ? { output_file_modules: [[0, 1]] } : {}),
     }
   )
 }
@@ -191,6 +197,39 @@ describe('analyzer NDJSON graph dump', () => {
     await expect(
       dumpAnalyzeGraph(root, id, '/missing', stream)
     ).rejects.toThrow('Unknown analyzer route')
+    expect(output).toBe('')
+  })
+
+  it('joins exact output contents and rejects an indexed fingerprint mismatch', async () => {
+    await writeFile(
+      join(snapshot, 'modules.data'),
+      modules(1, { module_index_hash: 'same-index' })
+    )
+    const extras = {
+      module_index_hash: 'same-index',
+      output_file_module_coverage: ['exact'],
+    }
+    await writeFile(join(snapshot, 'analyze.data'), route(extras, true))
+    expect(
+      (await dump('/')).records.find((record) => record.type === 'output')
+    ).toMatchObject({
+      modules: ['app', 'dep'],
+      coverage: 'exact',
+    })
+    await writeFile(
+      join(snapshot, 'analyze.data'),
+      route({ ...extras, module_index_hash: 'wrong' }, true)
+    )
+    let output = ''
+    const stream = new Writable({
+      write(chunk, _, callback) {
+        output += chunk
+        callback()
+      },
+    })
+    await expect(dumpAnalyzeGraph(root, id, '/', stream)).rejects.toThrow(
+      'fingerprint mismatch'
+    )
     expect(output).toBe('')
   })
 })
