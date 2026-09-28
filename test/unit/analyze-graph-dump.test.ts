@@ -308,6 +308,18 @@ describe('analyzer NDJSON graph dump', () => {
     expect(peak - startHeap).toBeLessThan(96 * 1024 * 1024)
   })
 
+  it('fails rather than silently accepting a broken output stream', async () => {
+    const stream = new Writable({
+      highWaterMark: 1,
+      write(_chunk, _encoding, callback) {
+        callback(new Error('broken pipe'))
+      },
+    })
+    await expect(dumpAnalyzeGraph(root, id, '/', stream)).rejects.toThrow(
+      'broken pipe'
+    )
+  })
+
   it('never calls missing membership exact and rejects unverified indexed triggers', async () => {
     await writeFile(
       join(snapshot, 'analyze.data'),
@@ -340,6 +352,125 @@ describe('analyzer NDJSON graph dump', () => {
     await expect(dumpAnalyzeGraph(root, id, '/', stream)).rejects.toThrow(
       'fingerprint mismatch'
     )
+    expect(output).toBe('')
+  })
+
+  it('exports typed load edges and explicit unresolved references', async () => {
+    await writeFile(
+      join(snapshot, 'modules.data'),
+      modules(1, { module_index_hash: 'same-index' })
+    )
+    await writeFile(
+      join(snapshot, 'analyze.data'),
+      route({
+        module_index_hash: 'same-index',
+        unresolved_output_references: [1],
+        chunk_load_edges: [
+          {
+            source_output_file_index: 0,
+            target_output_file_index: 0,
+            kind: 'asset_reference',
+            trigger_module_index: 0,
+          },
+        ],
+        unjoined_chunk_load_edges: [
+          {
+            target_path: 'other.js',
+            kind: 'worker_registration',
+            reason: 'missing_output',
+          },
+        ],
+      })
+    )
+    const { records } = await dump('/')
+    expect(
+      records.find((record) => record.type === 'route').coverage.load_edges
+    ).toBe('exact')
+    expect(
+      records.find((record) => record.type === 'output').unresolved_references
+    ).toBe(1)
+    expect(records.find((record) => record.type === 'load_edge')).toMatchObject(
+      {
+        source_output: 'app.js',
+        target_output: 'app.js',
+        kind: 'asset_reference',
+        trigger_module_ident: 'app',
+        trigger_join: 'joined',
+      }
+    )
+    expect(
+      records.find((record) => record.type === 'unresolved')
+    ).toMatchObject({
+      target_path: 'other.js',
+      source_output: null,
+      reason: 'missing_output',
+    })
+  })
+
+  it('rejects a malformed load target before writing any record', async () => {
+    await writeFile(
+      join(snapshot, 'analyze.data'),
+      route({
+        chunk_load_edges: [
+          {
+            source_output_file_index: 0,
+            target_output_file_index: 2,
+            kind: 'async',
+          },
+        ],
+      })
+    )
+    let output = ''
+    const stream = new Writable({
+      write(chunk, _, callback) {
+        output += chunk
+        callback()
+      },
+    })
+    await expect(dumpAnalyzeGraph(root, id, '/', stream)).rejects.toThrow(
+      'load output'
+    )
+    expect(output).toBe('')
+  })
+
+  it.each([
+    [
+      'invalid endpoint runtime',
+      {
+        route_entries: [
+          {
+            route_entry_id: 'r',
+            module_ident: 'app',
+            module_path: 'app/page.tsx',
+            role: 'route',
+            runtime: 1,
+          },
+        ],
+      },
+    ],
+    [
+      'invalid unresolved trigger',
+      {
+        unjoined_chunk_load_edges: [
+          {
+            target_path: 'other.js',
+            kind: 'worker_registration',
+            reason: 'unresolved',
+            trigger_module_ident: 2,
+          },
+        ],
+      },
+    ],
+  ])('rejects %s before stdout', async (_name, extra) => {
+    await writeFile(join(snapshot, 'analyze.data'), route(extra))
+    let output = ''
+    const stream = new Writable({
+      write(chunk, _, callback) {
+        output += chunk
+        callback()
+      },
+    })
+    await expect(dumpAnalyzeGraph(root, id, '/', stream)).rejects.toThrow()
     expect(output).toBe('')
   })
 })
