@@ -48,6 +48,15 @@ describe('Middleware Redirect', () => {
       expect(res.headers.get('Location')).toBe('/another')
     })
 
+    it('should forward the _rsc search param on redirects for RSC requests', async () => {
+      const res = await next.fetch('/to?pathname=/another&_rsc=abc123', {
+        redirect: 'manual',
+        headers: { RSC: '1' },
+      })
+      expect(res.status).toBe(302)
+      expect(res.headers.get('Location')).toBe('/another?_rsc=abc123')
+    })
+
     it(`should redirect to data urls with data requests and internal redirects`, async () => {
       const res = await fetchViaHTTP(
         next.url,

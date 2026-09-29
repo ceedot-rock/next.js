@@ -494,6 +494,22 @@ export async function adapter(
      */
     response = new Response(response.body, response)
 
+    /**
+     * Always forward the `_rsc` search parameter to the redirect destination for
+     * RSC requests, unless it's already present. This mirrors the rewrite handling
+     * above: without it, following the redirect with the RSC header set fails RSC
+     * hash validation and the server issues a second redirect, which can also lead
+     * to cache poisoning on caches keyed on the URL alone.
+     */
+    if (
+      isRSCRequest &&
+      rscHash &&
+      !redirectURL.searchParams.has(NEXT_RSC_UNION_QUERY)
+    ) {
+      redirectURL.searchParams.set(NEXT_RSC_UNION_QUERY, rscHash)
+      response.headers.set('Location', getRelativeURL(redirectURL, requestURL))
+    }
+
     if (!process.env.__NEXT_NO_MIDDLEWARE_URL_NORMALIZE) {
       if (redirectURL.host === requestURL.host) {
         redirectURL.buildId = buildId || redirectURL.buildId
