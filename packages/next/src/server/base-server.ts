@@ -3346,6 +3346,17 @@ export default abstract class Server<
           }
         }
 
+        // If the request itself was invalid (e.g. malformed percent-encoding
+        // in a dynamic segment) there may be no error page to render: an
+        // app-router-only build has no /_error page. Honor the 400 status
+        // that was already set for the bad request instead of falling
+        // through to a 500 below.
+        if (res.statusCode === 400) {
+          return {
+            body: RenderResult.fromStatic('Bad Request', 'text/plain'),
+          }
+        }
+
         throw new WrappedBuildError(
           new Error('missing required error components')
         )
